@@ -1,0 +1,177 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg-deep: #111315;
+  --surface-dark: #171A1D;
+  --surface-elevated: #22262A;
+  --text-cream: #F4EFE6;
+  --gold-primary: #C9A45C;
+  --gold-hover: #D8B46B;
+  --bronze-accent: #A98245;
+  --text-muted: #8E9297;
+  --border-dark: #2A2E33;
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-deep);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  scroll-behavior: smooth;
+  background-color: #111315;
+  color: #F4EFE6;
+  font-family: var(--font-sans);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+  color: #F4EFE6;
+  background-color: #111315;
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle architectural grid pattern overlay */
+body::before {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  content: "";
+  background-image:
+    linear-gradient(rgba(201, 164, 92, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 164, 92, 0.02) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.8) 0%, transparent 80%);
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-sans);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #C9A45C;
+  outline-offset: 2px;
+}
+
+input,
+select,
+textarea {
+  color: #F4EFE6;
+  background-color: #171A1D;
+  border: 1px solid #2A2E33;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6C727A;
+}
+
+select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #8E9297 50%),
+    linear-gradient(135deg, #8E9297 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 2.5rem !important;
+}
+
+table {
+  border-spacing: 0;
+}
+
+::selection {
+  color: #111315;
+  background: #C9A45C;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #111315;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: #22262A;
+  border: 1px solid #2A2E33;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #A98245;
+}
+
+@layer utilities {
+  .border-dark-subtle {
+    border-color: #2A2E33;
+  }
+  .bg-surface-dark {
+    background-color: #171A1D;
+  }
+  .bg-surface-elevated {
+    background-color: #22262A;
+  }
+  .gold-glow {
+    box-shadow: 0 0 25px rgba(201, 164, 92, 0.12);
+  }
+}
+
+/* Print utility for financial reports */
+@media print {
+  aside, header, button, .no-print {
+    display: none !important;
+  }
+  body, main, section {
+    background: white !important;
+    color: black !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .print-area {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+  }
+}
+
