@@ -60,6 +60,42 @@ function readStored(key, fallback) {
   }
 }
 
+function exportDebtsToCSV(debts, todayStr = today) {
+  const safeDebts = Array.isArray(debts) ? debts : [];
+  if (safeDebts.length === 0) {
+    alert("Weli ma jiraan xog dayno ah oo la soo dejin karo.");
+    return;
+  }
+
+  const headers = ["Market Name", "Supplier Phone", "Products Purchased", "Total Amount ($)", "Paid Amount ($)", "Remaining Balance ($)", "Date", "Status", "Notes"];
+  const rows = safeDebts.map((d) => {
+    if (!d) return [];
+    const total = Number(d.totalAmount) || 0;
+    const paid = Number(d.paidAmount) || 0;
+    const pending = Math.max(total - paid, 0);
+    return [
+      `"${String(d.marketName || "").replace(/"/g, '""')}"`,
+      `"${String(d.supplierPhone || "").replace(/"/g, '""')}"`,
+      `"${String(d.itemDescription || "").replace(/"/g, '""')}"`,
+      total.toFixed(2),
+      paid.toFixed(2),
+      pending.toFixed(2),
+      `"${d.debtDate || ""}"`,
+      `"${d.status || ""}"`,
+      `"${String(d.notes || "").replace(/"/g, '""')}"`,
+    ];
+  });
+
+  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", `Dheeman_Market_Debts_Report_${todayStr}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [reportDate, setReportDate] = useState(today);
@@ -353,29 +389,31 @@ export default function Home() {
 
   // Combined transactions stream for recent activity
   const recentActivities = useMemo(() => {
+    const safeSales = Array.isArray(sales) ? sales : [];
+    const safeExpenses = Array.isArray(expenses) ? expenses : [];
     const list = [
-      ...sales.map((s) => ({
-        id: s.id,
-        date: s.date,
-        detail: s.item,
+      ...safeSales.filter(Boolean).map((s) => ({
+        id: s?.id || crypto.randomUUID(),
+        date: s?.date || today,
+        detail: s?.item || "Sale Item",
         type: "Dakhli",
         typeCode: "revenue",
-        amount: s.amount,
+        amount: Number(s?.amount) || 0,
         status: "La xaqiijiyay",
       })),
-      ...expenses.map((e) => ({
-        id: e.id,
-        date: e.date,
-        detail: e.item,
-        type: e.type === "debt" ? "Dayn" : "Kharash",
-        typeCode: e.type,
-        amount: -e.amount,
-        status: e.type === "debt" ? "Baqi ku ah" : "La bixiyay",
+      ...safeExpenses.filter(Boolean).map((e) => ({
+        id: e?.id || crypto.randomUUID(),
+        date: e?.date || today,
+        detail: e?.item || "Expense Item",
+        type: e?.type === "debt" ? "Dayn" : "Kharash",
+        typeCode: e?.type || "cash",
+        amount: -(Number(e?.amount) || 0),
+        status: e?.type === "debt" ? "Baqi ku ah" : "La bixiyay",
       })),
     ];
-    list.sort((a, b) => (a.date < b.date ? 1 : -1));
+    list.sort((a, b) => ((a.date || "") < (b.date || "") ? 1 : -1));
     return searchQuery
-      ? list.filter((item) => item.detail.toLowerCase().includes(searchQuery.toLowerCase()))
+      ? list.filter((item) => String(item?.detail || "").toLowerCase().includes(String(searchQuery).toLowerCase()))
       : list;
   }, [sales, expenses, searchQuery]);
 
@@ -383,7 +421,10 @@ export default function Home() {
   const chartData = useMemo(() => {
     const somaliDays = ["Axad", "Isniin", "Talaado", "Arbaco", "Khamiis", "Jimce", "Sabti"];
     const result = [];
-    const baseDate = new Date(reportDate);
+    const safeSales = Array.isArray(sales) ? sales : [];
+    const safeExpenses = Array.isArray(expenses) ? expenses : [];
+    const validBaseDate = reportDate ? new Date(reportDate) : new Date();
+    const baseDate = isNaN(validBaseDate.getTime()) ? new Date() : validBaseDate;
 
     if (chartPeriod === "7d") {
       for (let i = 6; i >= 0; i--) {
@@ -392,8 +433,12 @@ export default function Home() {
         const dStr = d.toISOString().slice(0, 10);
         const dayName = somaliDays[d.getDay()];
 
-        const rev = sales.filter((s) => s.date === dStr).reduce((sum, s) => sum + s.amount, 0);
-        const exp = expenses.filter((e) => e.date === dStr).reduce((sum, e) => sum + e.amount, 0);
+        const rev = safeSales
+          .filter((s) => s && s.date === dStr)
+          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
+        const exp = safeExpenses
+          .filter((e) => e && e.date === dStr)
+          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
 
         result.push({
           date: dStr,
@@ -408,8 +453,12 @@ export default function Home() {
         d.setDate(d.getDate() - i);
         const dStr = d.toISOString().slice(0, 10);
 
-        const rev = sales.filter((s) => s.date === dStr).reduce((sum, s) => sum + s.amount, 0);
-        const exp = expenses.filter((e) => e.date === dStr).reduce((sum, e) => sum + e.amount, 0);
+        const rev = safeSales
+          .filter((s) => s && s.date === dStr)
+          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
+        const exp = safeExpenses
+          .filter((e) => e && e.date === dStr)
+          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
 
         result.push({
           date: dStr,
@@ -424,8 +473,12 @@ export default function Home() {
         d.setDate(d.getDate() - i * 7);
         const dStr = d.toISOString().slice(0, 10);
 
-        const rev = sales.filter((s) => s.date === dStr).reduce((sum, s) => sum + s.amount, 0);
-        const exp = expenses.filter((e) => e.date === dStr).reduce((sum, e) => sum + e.amount, 0);
+        const rev = safeSales
+          .filter((s) => s && s.date === dStr)
+          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
+        const exp = safeExpenses
+          .filter((e) => e && e.date === dStr)
+          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
 
         result.push({
           date: dStr,
@@ -440,8 +493,12 @@ export default function Home() {
         d.setMonth(d.getMonth() - i);
         const monthStr = d.toISOString().slice(0, 7);
 
-        const rev = sales.filter((s) => s.date.startsWith(monthStr)).reduce((sum, s) => sum + s.amount, 0);
-        const exp = expenses.filter((e) => e.date.startsWith(monthStr)).reduce((sum, e) => sum + e.amount, 0);
+        const rev = safeSales
+          .filter((s) => s && s.date && String(s.date).startsWith(monthStr))
+          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
+        const exp = safeExpenses
+          .filter((e) => e && e.date && String(e.date).startsWith(monthStr))
+          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
 
         result.push({
           date: monthStr,
@@ -948,9 +1005,8 @@ export default function Home() {
       <div className="flex flex-1 relative">
         {/* NAVIGATION SIDEBAR (Desktop Fixed, Mobile Slide-over) */}
         <aside
-          className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#171A1D] border-r border-[#2A2E33] flex flex-col justify-between transition-transform duration-300 ${
-            mobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
-          }`}
+          className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#171A1D] border-r border-[#2A2E33] flex flex-col justify-between transition-transform duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+            }`}
         >
           <div>
             {/* BRAND HEADER */}
@@ -993,11 +1049,10 @@ export default function Home() {
                       setActiveTab(item.key);
                       setMobileMenuOpen(false);
                     }}
-                    className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-lg text-sm font-semibold transition-all duration-150 relative group ${
-                      isActive
+                    className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-lg text-sm font-semibold transition-all duration-150 relative group ${isActive
                         ? "bg-[#22262A] text-[#F4EFE6] shadow-sm border border-[#2A2E33]"
                         : "text-[#8E9297] hover:bg-[#22262A]/60 hover:text-[#F4EFE6]"
-                    }`}
+                      }`}
                   >
                     {isActive && (
                       <span className="absolute left-0 top-2 bottom-2 w-1 bg-[#C9A45C] rounded-r-full" />
@@ -1258,11 +1313,10 @@ export default function Home() {
                           <button
                             key={period}
                             onClick={() => setChartPeriod(period)}
-                            className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
-                              chartPeriod === period
+                            className={`px-3 py-1 text-xs font-semibold rounded-md transition ${chartPeriod === period
                                 ? "bg-[#C9A45C] text-[#111315] font-bold shadow-sm"
                                 : "text-[#8E9297] hover:text-[#F4EFE6]"
-                            }`}
+                              }`}
                           >
                             {period === "7d" ? "7 Maalmood" : period === "30d" ? "30 Maalmood" : period === "3m" ? "3 Bilood" : "12 Bilood"}
                           </button>
@@ -1286,9 +1340,8 @@ export default function Home() {
                                   {/* REVENUE BAR */}
                                   <div
                                     style={{ height: `${revPct}%` }}
-                                    className={`w-3.5 rounded-t-sm bg-[#C9A45C] group-hover:bg-[#D8B46B] transition-all duration-300 relative ${
-                                      revPct === 0 ? "min-h-[2px] opacity-20" : ""
-                                    }`}
+                                    className={`w-3.5 rounded-t-sm bg-[#C9A45C] group-hover:bg-[#D8B46B] transition-all duration-300 relative ${revPct === 0 ? "min-h-[2px] opacity-20" : ""
+                                      }`}
                                   >
                                     <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-[#22262A] text-[#F4EFE6] text-[10px] px-1.5 py-0.5 rounded border border-[#2A2E33] pointer-events-none whitespace-nowrap z-20 shadow-md">
                                       Dakhli: {money(data.rev)}
@@ -1298,9 +1351,8 @@ export default function Home() {
                                   {/* EXPENSE BAR */}
                                   <div
                                     style={{ height: `${expPct}%` }}
-                                    className={`w-3.5 rounded-t-sm bg-[#EF4444]/80 group-hover:bg-[#EF4444] transition-all duration-300 relative ${
-                                      expPct === 0 ? "min-h-[2px] opacity-20" : ""
-                                    }`}
+                                    className={`w-3.5 rounded-t-sm bg-[#EF4444]/80 group-hover:bg-[#EF4444] transition-all duration-300 relative ${expPct === 0 ? "min-h-[2px] opacity-20" : ""
+                                      }`}
                                   >
                                     <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-[#22262A] text-[#F4EFE6] text-[10px] px-1.5 py-0.5 rounded border border-[#2A2E33] pointer-events-none whitespace-nowrap z-20 shadow-md">
                                       Kharash: {money(data.exp)}
@@ -1376,13 +1428,12 @@ export default function Home() {
                                 >
                                   <span className="font-semibold text-[#F4EFE6] truncate max-w-[110px]">{item.item}</span>
                                   <span
-                                    className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                                      remaining === 0
+                                    className={`px-2 py-0.5 rounded text-[11px] font-bold ${remaining === 0
                                         ? "bg-[#EF4444]/20 text-[#EF4444]"
                                         : isLow
-                                        ? "bg-[#C9A45C]/20 text-[#C9A45C]"
-                                        : "bg-[#22C55E]/20 text-[#22C55E]"
-                                    }`}
+                                          ? "bg-[#C9A45C]/20 text-[#C9A45C]"
+                                          : "bg-[#22C55E]/20 text-[#22C55E]"
+                                      }`}
                                   >
                                     {remaining} {item.unit}
                                   </span>
@@ -1584,17 +1635,140 @@ export default function Home() {
                       Maamulka Daymaha & Bakhaarrada Alaabta
                     </h3>
                     <p className="text-xs sm:text-sm text-[#8E9297] leading-relaxed">
-                      Diiwaanka lacagaha raashinka iyo alaabta lagu soo qaatay daynta iyo taariikhaha bixintooda.
+                      Diiwaanka lacagaha raashinka iyo alaabta lagu soo qaatay daynta, gadiyayaasha suuqyada, iyo Excel data analysis.
                     </p>
                   </div>
 
-                  <button
-                    onClick={() => openModal("debt")}
-                    className="px-4 py-2.5 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2 w-full md:w-auto"
-                  >
-                    <PlusIcon className="w-4 h-4" />
-                    <span>+ Ku Dar Dayn Cusub</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                    <button
+                      onClick={() => exportDebtsToCSV(debts, today)}
+                      className="px-3.5 py-2 rounded-md bg-[#22C55E]/15 hover:bg-[#22C55E]/25 text-[#22C55E] border border-[#22C55E]/40 text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2"
+                    >
+                      <DocumentIcon className="w-4 h-4 text-[#22C55E]" />
+                      <span>📥 Excel Data Analysis (Download CSV)</span>
+                    </button>
+                    <button
+                      onClick={() => openModal("debt")}
+                      className="px-4 py-2.5 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2"
+                    >
+                      <PlusIcon className="w-4 h-4" />
+                      <span>+ Ku Dar Dayn Cusub</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* INLINE DIRECT MARKET PURCHASE CARD FORM */}
+                <div className="p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] shadow-xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-[#2A2E33] pb-3">
+                    <h4 className="text-sm font-extrabold text-[#F4EFE6] flex items-center gap-2">
+                      <PlusIcon className="w-4 h-4 text-[#C9A45C]" />
+                      <span>Ku Dar Iib / Dayn Cusub Oo Suuq Ah (Direct Market Entry)</span>
+                    </h4>
+                    <span className="text-[11px] text-[#C9A45C] font-semibold">Directly saves to Market Cards & Supabase</span>
+                  </div>
+
+                  <form onSubmit={handleSaveDebt} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+                          Suuqa / Bakhaarka (Market Name) *
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Tusaale: Bakhaarka Xamdi, Suuqa Bakaaraha..."
+                          value={debtForm.marketName}
+                          onChange={(e) => setDebtForm({ ...debtForm, marketName: e.target.value })}
+                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+                          Alaabta la soo iibsaday (Products Purchased) *
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Tusaale: 5 Kiish Bariis ah, 2 Bareel Saliid ah..."
+                          value={debtForm.itemDescription}
+                          onChange={(e) => setDebtForm({ ...debtForm, itemDescription: e.target.value })}
+                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+                          Talefanka Suuqa (Supplier Phone)
+                        </label>
+                        <input
+                          type="tel"
+                          placeholder="Tusaale: 061XXXXXXX"
+                          value={debtForm.supplierPhone}
+                          onChange={(e) => setDebtForm({ ...debtForm, supplierPhone: e.target.value })}
+                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+                          Qiimaha Guud ($ Value) *
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={debtForm.totalAmount}
+                          onChange={(e) => setDebtForm({ ...debtForm, totalAmount: e.target.value })}
+                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+                          Lacagta Hore loo Bixiyay ($ Deposit)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={debtForm.paidAmount}
+                          onChange={(e) => setDebtForm({ ...debtForm, paidAmount: e.target.value })}
+                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+                          Taariikhda Iibka (Date Bought)
+                        </label>
+                        <input
+                          type="date"
+                          value={debtForm.debtDate}
+                          onChange={(e) => setDebtForm({ ...debtForm, debtDate: e.target.value })}
+                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+                      <input
+                        type="text"
+                        placeholder="Xusuusin ama Faahfaahin dheeraad ah..."
+                        value={debtForm.notes}
+                        onChange={(e) => setDebtForm({ ...debtForm, notes: e.target.value })}
+                        className="w-full sm:max-w-md px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                      />
+                      <button
+                        type="submit"
+                        className="px-6 py-2.5 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2"
+                      >
+                        <PlusIcon className="w-4 h-4" />
+                        <span>💾 Kaydi Iibka Suuqa (Save Card)</span>
+                      </button>
+                    </div>
+                  </form>
                 </div>
 
                 {/* METRICS CARDS */}
@@ -1667,19 +1841,20 @@ export default function Home() {
                 {/* MARKETS SUMMARY GRID */}
                 {debtSummary.marketsList.length > 0 && (
                   <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-[#C9A45C] uppercase tracking-wider">
-                      Suuqyada & Bakhaarrada (Markets Summary)
+                    <h4 className="text-xs font-bold text-[#C9A45C] uppercase tracking-wider flex items-center justify-between">
+                      <span>Suuqyada & Bakhaarrada (Excel Data Analysis Cards)</span>
+                      <span className="text-[#8E9297] font-normal text-[11px]">Total Markets: {debtSummary.marketCount}</span>
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                       {debtSummary.marketsList.map((m, idx) => (
-                        <div key={idx} className="p-4 rounded-lg bg-[#171A1D] border border-[#2A2E33] space-y-2 hover:border-[#C9A45C]/40 transition">
+                        <div key={idx} className="p-4 rounded-lg bg-[#171A1D] border border-[#2A2E33] space-y-2 hover:border-[#C9A45C]/40 transition shadow-md">
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-bold text-[#F4EFE6] flex items-center gap-1.5">
                               <StoreIcon className="w-3.5 h-3.5 text-[#C9A45C]" />
                               {m.name}
                             </span>
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#22262A] text-[#8E9297]">
-                              {m.count} dayn
+                              {m.count} Orod / Dayn
                             </span>
                           </div>
                           {m.phone && (
@@ -1695,7 +1870,7 @@ export default function Home() {
                               </span>
                             </div>
                             <div className="text-right">
-                              <span className="text-[#8E9297] text-[10px] block">Guud:</span>
+                              <span className="text-[#8E9297] text-[10px] block">Juamlada Guud:</span>
                               <span className="font-bold text-[#F4EFE6]">{money(m.total)}</span>
                             </div>
                           </div>
@@ -1705,9 +1880,9 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* FILTERS & SEARCH */}
+                {/* FILTERS & SEARCH & EXCEL DOWNLOAD */}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-bold text-[#8E9297]">Filter:</span>
                     <button
                       onClick={() => setDebtStatusFilter("all")}
@@ -1719,25 +1894,34 @@ export default function Home() {
                       onClick={() => setDebtStatusFilter("pending")}
                       className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "pending" ? "bg-[#EF4444] text-[#F4EFE6]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
                     >
-                      Laga rabo ({debts.filter(d => d.status !== 'paid').length})
+                      Laga rabo ({debts.filter(d => d && d.status !== 'paid').length})
                     </button>
                     <button
                       onClick={() => setDebtStatusFilter("paid")}
                       className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "paid" ? "bg-[#22C55E] text-[#111315]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
                     >
-                      La Bixiyay ({debts.filter(d => d.status === 'paid').length})
+                      La Bixiyay ({debts.filter(d => d && d.status === 'paid').length})
                     </button>
                   </div>
 
-                  <div className="relative w-full sm:w-64">
-                    <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9297]" />
-                    <input
-                      type="text"
-                      placeholder="Raadi suuq ama alaab..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-9 pr-3 py-1.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                    />
+                  <div className="flex items-center gap-3">
+                    <div className="relative w-full sm:w-64">
+                      <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9297]" />
+                      <input
+                        type="text"
+                        placeholder="Raadi suuq ama alaab..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full pl-9 pr-3 py-1.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                      />
+                    </div>
+                    <button
+                      onClick={() => exportDebtsToCSV(debts, today)}
+                      className="px-3 py-1.5 rounded-md bg-[#22C55E]/20 text-[#22C55E] border border-[#22C55E]/40 text-xs font-bold hover:bg-[#22C55E]/30 transition shrink-0"
+                      title="Download Excel CSV"
+                    >
+                      📊 Export CSV
+                    </button>
                   </div>
                 </div>
 
@@ -1812,12 +1996,12 @@ export default function Home() {
                   {drawerType === "expense"
                     ? "Kharash Cusub Bixi"
                     : drawerType === "stock"
-                    ? "Soo Dhig Kayd Cusub"
-                    : drawerType === "useStock"
-                    ? "Ka Jar Kaydka (Isticmaal)"
-                    : drawerType === "debt"
-                    ? "Ku Dar Dayn Cusub (Suuq)"
-                    : "Add Income / Sale"}
+                      ? "Soo Dhig Kayd Cusub"
+                      : drawerType === "useStock"
+                        ? "Ka Jar Kaydka (Isticmaal)"
+                        : drawerType === "debt"
+                          ? "Ku Dar Dayn Cusub (Suuq)"
+                          : "Add Income / Sale"}
                 </span>
               </h3>
               <button
@@ -1917,8 +2101,9 @@ export default function Home() {
 /* COMPONENT HELPER FUNCTIONS & TABLES */
 /* ==================================================== */
 
-function ActivityTable({ activities }) {
-  if (activities.length === 0) {
+function ActivityTable({ activities = [] }) {
+  const safeActivities = Array.isArray(activities) ? activities : [];
+  if (safeActivities.length === 0) {
     return <EmptyState text="Wax dhaqdhaqaaq ah weli ma ka dhicin meheradda." />;
   }
 
@@ -1935,23 +2120,23 @@ function ActivityTable({ activities }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-[#2A2E33]/60 bg-[#171A1D]">
-          {activities.map((item) => {
-            const isIncome = item.amount > 0;
+          {safeActivities.map((item) => {
+            if (!item) return null;
+            const isIncome = Number(item.amount) > 0;
             return (
-              <tr key={item.id} className="hover:bg-[#22262A]/40 transition">
-                <td className="px-4 py-3.5 text-[#8E9297] font-medium">{item.date}</td>
-                <td className="px-4 py-3.5 text-[#F4EFE6] font-bold">{item.detail}</td>
+              <tr key={item.id || Math.random()} className="hover:bg-[#22262A]/40 transition">
+                <td className="px-4 py-3.5 text-[#8E9297] font-medium">{item.date || "-"}</td>
+                <td className="px-4 py-3.5 text-[#F4EFE6] font-bold">{item.detail || "-"}</td>
                 <td className="px-4 py-3.5">
                   <span
-                    className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                      isIncome
+                    className={`px-2 py-0.5 rounded text-[11px] font-bold ${isIncome
                         ? "bg-[#C9A45C]/15 text-[#C9A45C]"
                         : item.typeCode === "debt"
-                        ? "bg-[#EF4444]/15 text-[#EF4444]"
-                        : "bg-[#A98245]/15 text-[#A98245]"
-                    }`}
+                          ? "bg-[#EF4444]/15 text-[#EF4444]"
+                          : "bg-[#A98245]/15 text-[#A98245]"
+                      }`}
                   >
-                    {item.type}
+                    {item.type || "Cash"}
                   </span>
                 </td>
                 <td className={`px-4 py-3.5 font-extrabold ${isIncome ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
@@ -1959,7 +2144,7 @@ function ActivityTable({ activities }) {
                 </td>
                 <td className="px-4 py-3.5">
                   <span className="px-2 py-0.5 rounded bg-[#22262A] text-[#8E9297] border border-[#2A2E33] text-[10px] font-semibold">
-                    {item.status}
+                    {item.status || "OK"}
                   </span>
                 </td>
               </tr>
@@ -1971,8 +2156,9 @@ function ActivityTable({ activities }) {
   );
 }
 
-function ExpenseTable({ expenses, onDelete }) {
-  if (expenses.length === 0) {
+function ExpenseTable({ expenses = [], onDelete }) {
+  const safeExpenses = Array.isArray(expenses) ? expenses : [];
+  if (safeExpenses.length === 0) {
     return <EmptyState text="Kharash weli la ma gelin. Riix '+ Bixi Kharash' si aad ugu darto." />;
   }
 
@@ -1990,42 +2176,45 @@ function ExpenseTable({ expenses, onDelete }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-[#2A2E33]/60 bg-[#171A1D]">
-          {expenses.map((expense) => (
-            <tr key={expense.id} className="hover:bg-[#22262A]/40 transition">
-              <td className="px-4 py-3.5">
-                <span
-                  className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${
-                    expense.type === "debt"
-                      ? "bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30"
-                      : "bg-[#A98245]/15 text-[#A98245] border border-[#A98245]/30"
-                  }`}
-                >
-                  {expense.type === "debt" ? "Dayn Payable" : "Cash Paid"}
-                </span>
-              </td>
-              <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">{expense.item}</td>
-              <td className="px-4 py-3.5 font-extrabold text-[#EF4444]">{money(expense.amount)}</td>
-              <td className="px-4 py-3.5 text-[#8E9297]">{expense.date}</td>
-              <td className="px-4 py-3.5 text-[#8E9297] italic">{expense.note || "-"}</td>
-              <td className="px-4 py-3.5 text-right">
-                <button
-                  onClick={() => onDelete(expense.id)}
-                  className="p-1 rounded text-[#EF4444] hover:bg-[#EF4444]/10 transition font-bold"
-                  title="Masax"
-                >
-                  Masax
-                </button>
-              </td>
-            </tr>
-          ))}
+          {safeExpenses.map((expense) => {
+            if (!expense) return null;
+            return (
+              <tr key={expense.id || Math.random()} className="hover:bg-[#22262A]/40 transition">
+                <td className="px-4 py-3.5">
+                  <span
+                    className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${expense.type === "debt"
+                        ? "bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30"
+                        : "bg-[#A98245]/15 text-[#A98245] border border-[#A98245]/30"
+                      }`}
+                  >
+                    {expense.type === "debt" ? "Dayn Payable" : "Cash Paid"}
+                  </span>
+                </td>
+                <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">{expense.item || "-"}</td>
+                <td className="px-4 py-3.5 font-extrabold text-[#EF4444]">{money(expense.amount)}</td>
+                <td className="px-4 py-3.5 text-[#8E9297]">{expense.date || "-"}</td>
+                <td className="px-4 py-3.5 text-[#8E9297] italic">{expense.note || "-"}</td>
+                <td className="px-4 py-3.5 text-right">
+                  <button
+                    onClick={() => onDelete(expense.id)}
+                    className="p-1 rounded text-[#EF4444] hover:bg-[#EF4444]/10 transition font-bold"
+                    title="Masax"
+                  >
+                    Masax
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
 
-function InventoryTable({ inventory, onDelete, onUseStock }) {
-  if (inventory.length === 0) {
+function InventoryTable({ inventory = [], onDelete, onUseStock }) {
+  const safeInventory = Array.isArray(inventory) ? inventory : [];
+  if (safeInventory.length === 0) {
     return <EmptyState text="Kaydka meheraddu waa faali. Riix '+ Soo Dhig Kayd' si aad ugu darto." />;
   }
 
@@ -2045,35 +2234,38 @@ function InventoryTable({ inventory, onDelete, onUseStock }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-[#2A2E33]/60 bg-[#171A1D]">
-          {inventory.map((item) => {
-            const remaining = Math.max(item.stocked - item.used, 0);
-            const totalVal = remaining * item.unitCost;
+          {safeInventory.map((item) => {
+            if (!item) return null;
+            const stocked = Number(item.stocked) || 0;
+            const used = Number(item.used) || 0;
+            const unitCost = Number(item.unitCost) || 0;
+            const remaining = Math.max(stocked - used, 0);
+            const totalVal = remaining * unitCost;
             const isOut = remaining === 0;
             const isLow = remaining <= 3 && !isOut;
 
             return (
-              <tr key={item.id} className="hover:bg-[#22262A]/40 transition">
-                <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">{item.item}</td>
+              <tr key={item.id || Math.random()} className="hover:bg-[#22262A]/40 transition">
+                <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">{item.item || "-"}</td>
                 <td className="px-4 py-3.5 text-[#8E9297]">
-                  {formatQuantity(item.stocked)} {item.unit}
+                  {formatQuantity(stocked)} {item.unit || ""}
                 </td>
                 <td className="px-4 py-3.5 text-[#8E9297]">
-                  {formatQuantity(item.used)} {item.unit}
+                  {formatQuantity(used)} {item.unit || ""}
                 </td>
                 <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">
-                  {formatQuantity(remaining)} {item.unit}
+                  {formatQuantity(remaining)} {item.unit || ""}
                 </td>
-                <td className="px-4 py-3.5 text-[#8E9297]">{money(item.unitCost)}</td>
+                <td className="px-4 py-3.5 text-[#8E9297]">{money(unitCost)}</td>
                 <td className="px-4 py-3.5 font-extrabold text-[#C9A45C]">{money(totalVal)}</td>
                 <td className="px-4 py-3.5">
                   <span
-                    className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${
-                      isOut
+                    className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${isOut
                         ? "bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30"
                         : isLow
-                        ? "bg-[#C9A45C]/15 text-[#C9A45C] border border-[#C9A45C]/30"
-                        : "bg-[#22C55E]/15 text-[#22C55E] border border-[#22C55E]/30"
-                    }`}
+                          ? "bg-[#C9A45C]/15 text-[#C9A45C] border border-[#C9A45C]/30"
+                          : "bg-[#22C55E]/15 text-[#22C55E] border border-[#22C55E]/30"
+                      }`}
                   >
                     {isOut ? "Out of Stock" : isLow ? "Low Stock" : "Available"}
                   </span>
@@ -2102,9 +2294,14 @@ function InventoryTable({ inventory, onDelete, onUseStock }) {
   );
 }
 
-function ProfitLossStatement({ summary, reportDate }) {
-  const totalExpenses = summary.cashSpent + summary.debt + summary.usedStockCost;
-  const grossProfit = summary.revenue - summary.usedStockCost;
+function ProfitLossStatement({ summary = {}, reportDate = "" }) {
+  const revenue = Number(summary?.revenue) || 0;
+  const cashSpent = Number(summary?.cashSpent) || 0;
+  const debt = Number(summary?.debt) || 0;
+  const usedStockCost = Number(summary?.usedStockCost) || 0;
+  const profit = Number(summary?.profit) || 0;
+  const totalExpenses = cashSpent + debt + usedStockCost;
+  const grossProfit = revenue - usedStockCost;
 
   return (
     <div className="max-w-4xl mx-auto rounded-xl bg-[#171A1D] border border-[#2A2E33] shadow-2xl overflow-hidden print-area">
@@ -2115,7 +2312,7 @@ function ProfitLossStatement({ summary, reportDate }) {
         </div>
         <h2 className="text-3xl font-extrabold text-[#F4EFE6] tracking-tight">Dheeman Restaurant</h2>
         <p className="text-xs text-[#8E9297]">
-          Profit & Loss Statement — Date: <span className="text-[#C9A45C] font-semibold">{reportDate}</span>
+          Profit & Loss Statement — Date: <span className="text-[#C9A45C] font-semibold">{reportDate || today}</span>
         </p>
       </div>
 
@@ -2126,8 +2323,8 @@ function ProfitLossStatement({ summary, reportDate }) {
           <div className="text-xs font-bold uppercase tracking-wider text-[#C9A45C] border-b border-[#2A2E33] pb-1">
             1. Income / Revenue (Dakhliga Tooska Ah)
           </div>
-          <StatementLine label="Lacagta Iibka Meheradda Soo Gashay" value={summary.revenue} />
-          <StatementLine label="Total Operating Income" value={summary.revenue} isTotal />
+          <StatementLine label="Lacagta Iibka Meheradda Soo Gashay" value={revenue} />
+          <StatementLine label="Total Operating Income" value={revenue} isTotal />
         </div>
 
         {/* COGS SECTION */}
@@ -2135,7 +2332,7 @@ function ProfitLossStatement({ summary, reportDate }) {
           <div className="text-xs font-bold uppercase tracking-wider text-[#A98245] border-b border-[#2A2E33] pb-1">
             2. Cost of Goods Sold (Qiimaha Kaydka La Isticmaalay)
           </div>
-          <StatementLine label="Qiimaha Raashinka/Kaydka La Isticmaalay" value={summary.usedStockCost} />
+          <StatementLine label="Qiimaha Raashinka/Kaydka La Isticmaalay" value={usedStockCost} />
           <StatementLine label="Gross Profit (Faa'iidada Hordhaca Ah)" value={grossProfit} isTotal />
         </div>
 
@@ -2144,22 +2341,21 @@ function ProfitLossStatement({ summary, reportDate }) {
           <div className="text-xs font-bold uppercase tracking-wider text-[#EF4444] border-b border-[#2A2E33] pb-1">
             3. Operating Expenses (Kharashaadka Meheradda)
           </div>
-          <StatementLine label="Kharash Cash Ah Oo La Bixiyay" value={summary.cashSpent} />
-          <StatementLine label="Dayn Cusub Oo Meheradda Ku Soo Badatay" value={summary.debt} />
+          <StatementLine label="Kharash Cash Ah Oo La Bixiyay" value={cashSpent} />
+          <StatementLine label="Dayn Cusub Oo Meheradda Ku Soo Badatay" value={debt} />
           <StatementLine label="Total Operating Expenses" value={totalExpenses} isTotal />
         </div>
 
         {/* NET PROFIT RESULT BANNER */}
         <div className="pt-4 border-t-2 border-[#2A2E33]">
           <div
-            className={`p-5 rounded-lg border flex items-center justify-between text-lg font-extrabold ${
-              summary.profit >= 0
+            className={`p-5 rounded-lg border flex items-center justify-between text-lg font-extrabold ${profit >= 0
                 ? "bg-[#22C55E]/10 border-[#22C55E]/40 text-[#22C55E]"
                 : "bg-[#EF4444]/10 border-[#EF4444]/40 text-[#EF4444]"
-            }`}
+              }`}
           >
-            <span>{summary.profit >= 0 ? "NET PROFIT (FAA'IIDO NADIIF AH)" : "NET LOSS (KHASAARE NADIIF AH)"}</span>
-            <span className="text-2xl tracking-tight">{money(summary.profit)}</span>
+            <span>{profit >= 0 ? "NET PROFIT (FAA'IIDO NADIIF AH)" : "NET LOSS (KHASAARE NADIIF AH)"}</span>
+            <span className="text-2xl tracking-tight">{money(profit)}</span>
           </div>
         </div>
       </div>
@@ -2657,6 +2853,14 @@ function StoreIcon({ className }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h18v4H3V3zm2 4v12a2 2 0 002 2h10a2 2 0 002-2V7M9 11h6m-6 4h4" />
+    </svg>
+  );
+}
+
+function DocumentIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
     </svg>
   );
 }
