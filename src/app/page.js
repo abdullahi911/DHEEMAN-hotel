@@ -75,15 +75,27 @@ export default function Home() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState("all");
 
-  // Supabase Auth State
+  // Auth State (Supabase + Local Fallback)
   const [userSession, setUserSession] = useState(null);
+  const [localSession, setLocalSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authMode, setAuthMode] = useState("signin");
 
+  const isLoggedIn = Boolean(userSession || localSession);
+
   useEffect(() => {
+    try {
+      const savedLocal = localStorage.getItem("dheeman-local-auth");
+      if (savedLocal) {
+        setLocalSession(JSON.parse(savedLocal));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
     if (!supabase) {
       setAuthLoading(false);
       return;
@@ -103,6 +115,19 @@ export default function Home() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  const handleSignOut = async () => {
+    if (supabase) {
+      await signOutUser();
+    }
+    setUserSession(null);
+    setLocalSession(null);
+    try {
+      localStorage.removeItem("dheeman-local-auth");
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Load live data from Supabase tables on login
   useEffect(() => {
@@ -586,7 +611,7 @@ export default function Home() {
 
   const activeNav = navItems.find((item) => item.key === activeTab);
 
-  if (hasSupabaseConfig && !userSession && !authLoading) {
+  if (!isLoggedIn && !authLoading) {
     return (
       <div className="min-h-screen bg-[#111315] text-[#F4EFE6] flex items-center justify-center p-4 selection:bg-[#C9A45C] selection:text-[#111315]">
         <div className="w-full max-w-md bg-[#171A1D] border border-[#2A2E33] rounded-xl shadow-2xl p-8 space-y-6">
@@ -600,10 +625,35 @@ export default function Home() {
                 Restaurant Management
               </p>
             </div>
+
+            {/* CONNECTION STATUS BADGE */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold border mx-auto">
+              {hasSupabaseConfig ? (
+                <span className="flex items-center gap-1.5 text-[#10B981] bg-[#10B981]/10 px-2.5 py-0.5 rounded-full border border-[#10B981]/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse"></span>
+                  Supabase Cloud Connected
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-[#C9A45C] bg-[#C9A45C]/10 px-2.5 py-0.5 rounded-full border border-[#C9A45C]/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#C9A45C]"></span>
+                  Local Manager Mode (Vercel)
+                </span>
+              )}
+            </div>
+
             <p className="text-xs text-[#8E9297] pt-1">
               Fadlan soo gal si aad u gasho maamulka meheraddaada.
             </p>
           </div>
+
+          {!hasSupabaseConfig && (
+            <div className="p-3 rounded-lg bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-[11px] space-y-1">
+              <p className="font-bold">💡 Ogeysiis Vercel Deployment:</p>
+              <p className="text-[#8E9297]">
+                Supabase Environment Variables-ka ayaan weli lagu meelayn Vercel Settings. Waxaad ku soo gali kartaa email iyo password maxalli ah. Si cloud-ka loo furo, raac faylka <code className="text-[#C9A45C]">.env.example</code>.
+              </p>
+            </div>
+          )}
 
           {authError && (
             <div className="p-3 rounded-md bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs font-semibold text-center">
@@ -616,6 +666,10 @@ export default function Home() {
             type="button"
             onClick={async () => {
               setAuthError("");
+              if (!hasSupabaseConfig) {
+                setAuthError("Google Login wuxuu u baahan yahay Supabase keys ku jira Vercel Environment Variables.");
+                return;
+              }
               const res = await signInWithGoogle();
               if (res?.error) setAuthError(res.error.message);
             }}
@@ -628,7 +682,7 @@ export default function Home() {
           <div className="relative flex items-center justify-center my-2">
             <div className="w-full border-t border-[#2A2E33]" />
             <span className="bg-[#171A1D] px-3 text-[10px] text-[#8E9297] uppercase font-bold absolute">
-              Ama Email
+              Ama Email / Password
             </span>
           </div>
 
@@ -637,11 +691,23 @@ export default function Home() {
               e.preventDefault();
               setAuthError("");
               if (!authEmail || !authPassword) return;
-              const res =
-                authMode === "signin"
-                  ? await signInWithEmail(authEmail, authPassword)
-                  : await signUpWithEmail(authEmail, authPassword);
-              if (res?.error) setAuthError(res.error.message);
+
+              if (hasSupabaseConfig) {
+                const res =
+                  authMode === "signin"
+                    ? await signInWithEmail(authEmail, authPassword)
+                    : await signUpWithEmail(authEmail, authPassword);
+                if (res?.error) setAuthError(res.error.message);
+              } else {
+                // Local Session Fallback
+                const localData = { email: authEmail, loggedInAt: new Date().toISOString() };
+                setLocalSession(localData);
+                try {
+                  localStorage.setItem("dheeman-local-auth", JSON.stringify(localData));
+                } catch (err) {
+                  console.error(err);
+                }
+              }
             }}
             className="space-y-4"
           >
@@ -819,18 +885,18 @@ export default function Home() {
               )}
               <div className="overflow-hidden">
                 <p className="text-xs font-bold text-[#F4EFE6] truncate">
-                  {userSession?.user?.user_metadata?.full_name || userSession?.user?.email || "Manager Profile"}
+                  {userSession?.user?.user_metadata?.full_name || userSession?.user?.email || localSession?.email || "Manager Profile"}
                 </p>
                 <p className="text-[10px] text-[#8E9297] truncate">
-                  {userSession?.user?.email || "Dheeman Main Branch"}
+                  {userSession?.user?.email || localSession?.email || "Dheeman Main Branch"}
                 </p>
               </div>
             </div>
 
-            {userSession && (
+            {isLoggedIn && (
               <button
-                onClick={() => signOutUser()}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#2A2E33] text-[#F4EFE6] text-xs font-bold transition"
+                onClick={handleSignOut}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#2A2E33] text-[#F4EFE6] text-xs font-bold transition hover:text-[#EF4444]"
               >
                 <span>Ka Bax (Sign Out)</span>
               </button>
