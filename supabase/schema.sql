@@ -90,6 +90,22 @@ create table if not exists public.sales (
   created_at timestamptz not null default now()
 );
 
+-- 6. DEBTS & MARKETS TABLE (Dayn & Suuqyo)
+create table if not exists public.debts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade default auth.uid(),
+  market_name text not null,
+  supplier_phone text,
+  item_description text not null,
+  total_amount numeric(12, 2) not null default 0,
+  paid_amount numeric(12, 2) not null default 0,
+  debt_date date not null default current_date,
+  due_date date,
+  status text not null default 'pending' check (status in ('pending', 'partial', 'paid')),
+  notes text,
+  created_at timestamptz not null default now()
+);
+
 -- ========================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- Ensures only authenticated users can access their data
@@ -100,6 +116,7 @@ alter table public.expenses enable row level security;
 alter table public.inventory_items enable row level security;
 alter table public.inventory_usage enable row level security;
 alter table public.sales enable row level security;
+alter table public.debts enable row level security;
 
 -- PROFILES POLICIES
 drop policy if exists "Users can view own profile" on public.profiles;
@@ -137,3 +154,11 @@ create policy "Authenticated users manage own sales" on public.sales
   for all to authenticated
   using (auth.uid() = user_id or user_id is null)
   with check (auth.uid() = user_id or user_id is null);
+
+-- DEBTS POLICIES
+drop policy if exists "Authenticated users manage own debts" on public.debts;
+create policy "Authenticated users manage own debts" on public.debts
+  for all to authenticated
+  using (auth.uid() = user_id or user_id is null)
+  with check (auth.uid() = user_id or user_id is null);
+

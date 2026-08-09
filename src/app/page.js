@@ -16,11 +16,13 @@ const initialExpenses = [];
 const initialInventory = [];
 const initialUsage = [];
 const initialSales = [];
+const initialDebts = [];
 
 const navItems = [
   { key: "dashboard", label: "Dashboard", sub: "Maamulka Maanta", icon: "grid" },
   { key: "expenses", label: "Kharash", sub: "Diiwaanka Kharashka", icon: "credit-card" },
   { key: "inventory", label: "Kayd", sub: "Alaabta & Raashinka", icon: "box" },
+  { key: "debts", label: "Dayn & Suuqyo", sub: "Bakhaarrada & Daymaha", icon: "store" },
   { key: "reports", label: "Warbixinno", sub: "Profit & Loss", icon: "pie-chart" },
 ];
 
@@ -65,15 +67,17 @@ export default function Home() {
   const [inventory, setInventory] = useState(initialInventory);
   const [usage, setUsage] = useState(initialUsage);
   const [sales, setSales] = useState(initialSales);
+  const [debts, setDebts] = useState(initialDebts);
   const [hydrated, setHydrated] = useState(false);
 
   // UI Interactive States
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerType, setDrawerType] = useState(null); // 'expense' | 'stock' | 'useStock' | 'sale'
+  const [drawerType, setDrawerType] = useState(null); // 'expense' | 'stock' | 'useStock' | 'sale' | 'debt'
   const [searchQuery, setSearchQuery] = useState("");
   const [chartPeriod, setChartPeriod] = useState("7d");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState("all");
+  const [debtStatusFilter, setDebtStatusFilter] = useState("all"); // 'all' | 'pending' | 'paid'
 
   // Auth State (Supabase + Local Fallback)
   const [userSession, setUserSession] = useState(null);
@@ -135,11 +139,12 @@ export default function Home() {
       if (!supabase || !userSession?.user) return;
 
       try {
-        const [expRes, invRes, useRes, saleRes] = await Promise.all([
+        const [expRes, invRes, useRes, saleRes, debtRes] = await Promise.all([
           supabase.from("expenses").select("*").order("created_at", { ascending: false }),
           supabase.from("inventory_items").select("*").order("created_at", { ascending: false }),
           supabase.from("inventory_usage").select("*").order("created_at", { ascending: false }),
           supabase.from("sales").select("*").order("created_at", { ascending: false }),
+          supabase.from("debts").select("*").order("created_at", { ascending: false }),
         ]);
 
         if (expRes.data) {
@@ -193,6 +198,23 @@ export default function Home() {
             }))
           );
         }
+
+        if (debtRes.data) {
+          setDebts(
+            debtRes.data.map((d) => ({
+              id: d.id,
+              marketName: d.market_name,
+              supplierPhone: d.supplier_phone || "",
+              itemDescription: d.item_description,
+              totalAmount: Number(d.total_amount),
+              paidAmount: Number(d.paid_amount),
+              debtDate: d.debt_date,
+              dueDate: d.due_date || "",
+              status: d.status,
+              notes: d.notes || "",
+            }))
+          );
+        }
       } catch (err) {
         console.error("Error loading Supabase data:", err);
       }
@@ -226,10 +248,25 @@ export default function Home() {
     amount: "",
     date: today,
   });
+  const [debtForm, setDebtForm] = useState({
+    marketName: "",
+    supplierPhone: "",
+    itemDescription: "",
+    totalAmount: "",
+    paidAmount: "",
+    debtDate: today,
+    notes: "",
+  });
+  const [payDebtModal, setPayDebtModal] = useState({
+    open: false,
+    debtId: null,
+    amount: "",
+    marketName: "",
+  });
 
   useEffect(() => {
     if (window.localStorage.getItem("dheeman-data-version") !== "2") {
-      ["expenses", "inventory", "usage", "sales"].forEach((key) => {
+      ["expenses", "inventory", "usage", "sales", "debts"].forEach((key) => {
         window.localStorage.removeItem(`dheeman-${key}`);
       });
       window.localStorage.setItem("dheeman-data-version", "2");
@@ -239,6 +276,7 @@ export default function Home() {
     setInventory(readStored("dheeman-inventory", initialInventory));
     setUsage(readStored("dheeman-usage", initialUsage));
     setSales(readStored("dheeman-sales", initialSales));
+    setDebts(readStored("dheeman-debts", initialDebts));
     setHydrated(true);
   }, []);
 
@@ -265,6 +303,12 @@ export default function Home() {
       window.localStorage.setItem("dheeman-sales", JSON.stringify(sales));
     }
   }, [hydrated, sales]);
+
+  useEffect(() => {
+    if (hydrated) {
+      window.localStorage.setItem("dheeman-debts", JSON.stringify(debts));
+    }
+  }, [debts, hydrated]);
 
   const summary = useMemo(() => {
     const dailyExpenses = expenses.filter((entry) => entry.date === reportDate);
@@ -599,12 +643,112 @@ export default function Home() {
     }
   }
 
+  async function handleSaveDebt(event) {
+    event.preventDefault();
+    if (!debtForm.marketName || !debtForm.itemDescription || !debtForm.totalAmount) return;
+
+    const total = numberValue(debtForm.totalAmount);
+    const paid = numberValue(debtForm.paidAmount);
+    let status = "pending";
+    if (paid >= total && total > 0) {
+      status = "paid";
+    } else if (paid > 0) {
+      status = "partial";
+    }
+
+    const newDebt = {
+      id: crypto.randomUUID(),
+      marketName: debtForm.marketName,
+      supplierPhone: debtForm.supplierPhone || "",
+      itemDescription: debtForm.itemDescription,
+      totalAmount: total,
+      paidAmount: paid,
+      debtDate: debtForm.debtDate || today,
+      status: status,
+      notes: debtForm.notes || "",
+    };
+
+    setDebts((current) => [newDebt, ...current]);
+    setDebtForm({
+      marketName: "",
+      supplierPhone: "",
+      itemDescription: "",
+      totalAmount: "",
+      paidAmount: "",
+      debtDate: today,
+      notes: "",
+    });
+    closeModal();
+
+    if (supabase && userSession?.user) {
+      await supabase.from("debts").insert({
+        id: newDebt.id,
+        user_id: userSession.user.id,
+        market_name: newDebt.marketName,
+        supplier_phone: newDebt.supplierPhone,
+        item_description: newDebt.itemDescription,
+        total_amount: newDebt.totalAmount,
+        paid_amount: newDebt.paidAmount,
+        debt_date: newDebt.debtDate,
+        status: newDebt.status,
+        notes: newDebt.notes,
+      });
+    }
+  }
+
+  async function handlePayDebtSubmit(event) {
+    event.preventDefault();
+    if (!payDebtModal.debtId || !payDebtModal.amount) return;
+
+    const addPay = numberValue(payDebtModal.amount);
+    const targetDebt = debts.find((d) => d.id === payDebtModal.debtId);
+    if (!targetDebt) return;
+
+    const newPaid = targetDebt.paidAmount + addPay;
+    let newStatus = "pending";
+    if (newPaid >= targetDebt.totalAmount) {
+      newStatus = "paid";
+    } else if (newPaid > 0) {
+      newStatus = "partial";
+    }
+
+    setDebts((current) =>
+      current.map((d) =>
+        d.id === payDebtModal.debtId
+          ? { ...d, paidAmount: newPaid, status: newStatus }
+          : d
+      )
+    );
+
+    setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" });
+
+    if (supabase && userSession?.user) {
+      await supabase
+        .from("debts")
+        .update({
+          paid_amount: newPaid,
+          status: newStatus,
+        })
+        .eq("id", payDebtModal.debtId);
+    }
+  }
+
+  async function deleteDebt(id) {
+    if (confirm("Ma ziada in aad masaxdo dayntan?")) {
+      setDebts((current) => current.filter((d) => d.id !== id));
+      if (supabase && userSession?.user) {
+        await supabase.from("debts").delete().eq("id", id);
+      }
+    }
+  }
+
   function clearAllData() {
     if (confirm("Ma ziada in aad masaxdo dhammaan xogta?")) {
       setExpenses([]);
       setInventory([]);
       setUsage([]);
       setSales([]);
+      setDebts([]);
       setUsageForm((current) => ({ ...current, stockId: "" }));
     }
   }
@@ -1425,7 +1569,191 @@ export default function Home() {
             )}
 
             {/* ==================================================== */}
-            {/* TAB 4: WARBIXINNO (REPORTS - P&L) PAGE */}
+            {/* TAB 4: DAYN & SUUQYO (DEBTS & MARKETS) PAGE */}
+            {/* ==================================================== */}
+            {activeTab === "debts" && (
+              <div className="space-y-6">
+                {/* HEADER BANNER */}
+                <div className="p-6 rounded-xl bg-gradient-to-r from-[#171A1D] via-[#22262A] to-[#171A1D] border border-[#2A2E33] flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
+                  <div className="space-y-2 relative z-10 max-w-2xl">
+                    <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-xs font-bold uppercase tracking-wider">
+                      <StoreIcon className="w-3.5 h-3.5" />
+                      <span>Suuqyada & Daymaha (Markets & Debts)</span>
+                    </div>
+                    <h3 className="text-2xl sm:text-3xl font-extrabold text-[#F4EFE6] tracking-tight">
+                      Maamulka Daymaha & Bakhaarrada Alaabta
+                    </h3>
+                    <p className="text-xs sm:text-sm text-[#8E9297] leading-relaxed">
+                      Diiwaanka lacagaha raashinka iyo alaabta lagu soo qaatay daynta iyo taariikhaha bixintooda.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => openModal("debt")}
+                    className="px-4 py-2.5 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2 w-full md:w-auto"
+                  >
+                    <PlusIcon className="w-4 h-4" />
+                    <span>+ Ku Dar Dayn Cusub</span>
+                  </button>
+                </div>
+
+                {/* METRICS CARDS */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* CARD 1: JUAMALADA DAYNTA */}
+                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
+                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
+                      <span>Juamlada Daynta Guud</span>
+                      <span className="p-1.5 rounded-md bg-[#C9A45C]/10 text-[#C9A45C]">
+                        <CreditCardIcon className="w-4 h-4" />
+                      </span>
+                    </div>
+                    <div className="mt-3 text-2xl font-extrabold text-[#F4EFE6]">
+                      {money(debtSummary.totalOriginalDebt)}
+                    </div>
+                    <div className="mt-2 text-[11px] text-[#8E9297]">
+                      Wadar alaabta daynta lagu soo iibsaday
+                    </div>
+                  </div>
+
+                  {/* CARD 2: BAAQIGA LAGU LEEYAHAY */}
+                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#EF4444]/40 bg-gradient-to-br from-[#171A1D] to-[#EF4444]/5">
+                    <div className="flex items-center justify-between text-xs text-[#EF4444] font-semibold">
+                      <span>Baaqiga Lagu leeyahay</span>
+                      <span className="p-1.5 rounded-md bg-[#EF4444]/15 text-[#EF4444]">
+                        <AlertIcon className="w-4 h-4" />
+                      </span>
+                    </div>
+                    <div className="mt-3 text-2xl font-extrabold text-[#EF4444]">
+                      {money(debtSummary.totalPendingDebt)}
+                    </div>
+                    <div className="mt-2 text-[11px] text-[#EF4444]/80 font-medium">
+                      Dhiman in la bixiyo
+                    </div>
+                  </div>
+
+                  {/* CARD 3: LACAGTA LA BIXIYAY */}
+                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#22C55E]/30">
+                    <div className="flex items-center justify-between text-xs text-[#22C55E] font-semibold">
+                      <span>Lacagta La Bixiyay</span>
+                      <span className="p-1.5 rounded-md bg-[#22C55E]/10 text-[#22C55E]">
+                        <DollarIcon className="w-4 h-4" />
+                      </span>
+                    </div>
+                    <div className="mt-3 text-2xl font-extrabold text-[#22C55E]">
+                      {money(debtSummary.totalPaidDebt)}
+                    </div>
+                    <div className="mt-2 text-[11px] text-[#22C55E]/80 font-medium">
+                      Partially or fully settled
+                    </div>
+                  </div>
+
+                  {/* CARD 4: TIRADA SUUQYADA */}
+                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
+                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
+                      <span>Suuqyada & Gadiyayaasha</span>
+                      <span className="p-1.5 rounded-md bg-[#3B82F6]/10 text-[#3B82F6]">
+                        <StoreIcon className="w-4 h-4" />
+                      </span>
+                    </div>
+                    <div className="mt-3 text-2xl font-extrabold text-[#F4EFE6]">
+                      {debtSummary.marketCount} <span className="text-xs font-medium text-[#8E9297]">Suuq/Bakhaar</span>
+                    </div>
+                    <div className="mt-2 text-[11px] text-[#8E9297]">
+                      Qaybaha daynta laga soo qaatay
+                    </div>
+                  </div>
+                </div>
+
+                {/* MARKETS SUMMARY GRID */}
+                {debtSummary.marketsList.length > 0 && (
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-[#C9A45C] uppercase tracking-wider">
+                      Suuqyada & Bakhaarrada (Markets Summary)
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                      {debtSummary.marketsList.map((m, idx) => (
+                        <div key={idx} className="p-4 rounded-lg bg-[#171A1D] border border-[#2A2E33] space-y-2 hover:border-[#C9A45C]/40 transition">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-[#F4EFE6] flex items-center gap-1.5">
+                              <StoreIcon className="w-3.5 h-3.5 text-[#C9A45C]" />
+                              {m.name}
+                            </span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#22262A] text-[#8E9297]">
+                              {m.count} dayn
+                            </span>
+                          </div>
+                          {m.phone && (
+                            <p className="text-[11px] text-[#8E9297]">
+                              📞 Tel: <a href={`tel:${m.phone}`} className="text-[#C9A45C] hover:underline">{m.phone}</a>
+                            </p>
+                          )}
+                          <div className="pt-2 border-t border-[#2A2E33] flex items-center justify-between text-xs">
+                            <div>
+                              <span className="text-[#8E9297] text-[10px] block">Baaqiga Dhiman:</span>
+                              <span className={`font-extrabold ${m.pending > 0 ? "text-[#EF4444]" : "text-[#22C55E]"}`}>
+                                {money(m.pending)}
+                              </span>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[#8E9297] text-[10px] block">Guud:</span>
+                              <span className="font-bold text-[#F4EFE6]">{money(m.total)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* FILTERS & SEARCH */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-[#8E9297]">Filter:</span>
+                    <button
+                      onClick={() => setDebtStatusFilter("all")}
+                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "all" ? "bg-[#C9A45C] text-[#111315]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
+                    >
+                      Dhammaan ({debts.length})
+                    </button>
+                    <button
+                      onClick={() => setDebtStatusFilter("pending")}
+                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "pending" ? "bg-[#EF4444] text-[#F4EFE6]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
+                    >
+                      Laga rabo ({debts.filter(d => d.status !== 'paid').length})
+                    </button>
+                    <button
+                      onClick={() => setDebtStatusFilter("paid")}
+                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "paid" ? "bg-[#22C55E] text-[#111315]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
+                    >
+                      La Bixiyay ({debts.filter(d => d.status === 'paid').length})
+                    </button>
+                  </div>
+
+                  <div className="relative w-full sm:w-64">
+                    <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9297]" />
+                    <input
+                      type="text"
+                      placeholder="Raadi suuq ama alaab..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-3 py-1.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                    />
+                  </div>
+                </div>
+
+                {/* DEBTS TABLE */}
+                <DebtTable
+                  debts={debts}
+                  filter={debtStatusFilter}
+                  search={searchQuery}
+                  onPay={(debt) => setPayDebtModal({ open: true, debtId: debt.id, amount: "", marketName: debt.marketName })}
+                  onDelete={deleteDebt}
+                />
+              </div>
+            )}
+
+            {/* ==================================================== */}
+            {/* TAB 5: WARBIXINNO (REPORTS - P&L) PAGE */}
             {/* ==================================================== */}
             {activeTab === "reports" && (
               <div className="space-y-6">
@@ -1487,6 +1815,8 @@ export default function Home() {
                     ? "Soo Dhig Kayd Cusub"
                     : drawerType === "useStock"
                     ? "Ka Jar Kaydka (Isticmaal)"
+                    : drawerType === "debt"
+                    ? "Ku Dar Dayn Cusub (Suuq)"
                     : "Add Income / Sale"}
                 </span>
               </h3>
@@ -1536,7 +1866,46 @@ export default function Home() {
                   onCancel={closeModal}
                 />
               )}
+
+              {drawerType === "debt" && (
+                <DebtForm
+                  form={debtForm}
+                  setForm={setDebtForm}
+                  onSubmit={handleSaveDebt}
+                  onCancel={closeModal}
+                />
+              )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* QUICK PAY DEBT MODAL */}
+      {payDebtModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            onClick={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
+          />
+          <div className="relative w-full max-w-md bg-[#171A1D] border border-[#2A2E33] rounded-xl shadow-2xl overflow-hidden z-10 p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#2A2E33] pb-3">
+              <h3 className="text-sm font-extrabold text-[#F4EFE6] flex items-center gap-2">
+                <StoreIcon className="w-4 h-4 text-[#C9A45C]" />
+                <span>Bixi Daynta Suuqa</span>
+              </h3>
+              <button
+                onClick={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
+                className="p-1 rounded-md text-[#8E9297] hover:text-[#F4EFE6]"
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
+            <PayDebtForm
+              modal={payDebtModal}
+              setModal={setPayDebtModal}
+              onSubmit={handlePayDebtSubmit}
+              onCancel={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
+            />
           </div>
         </div>
       )}
@@ -2146,6 +2515,9 @@ function NavIcon({ name, className }) {
       </svg>
     );
   }
+  if (name === "store") {
+    return <StoreIcon className={className} />;
+  }
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
@@ -2278,5 +2650,269 @@ function GoogleIcon({ className }) {
         d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
       />
     </svg>
+  );
+}
+
+function StoreIcon({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h18v4H3V3zm2 4v12a2 2 0 002 2h10a2 2 0 002-2V7M9 11h6m-6 4h4" />
+    </svg>
+  );
+}
+
+function DebtForm({ form, setForm, onSubmit, onCancel }) {
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div>
+        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+          Suuqa / Bakhaarka (Market Name) *
+        </label>
+        <input
+          type="text"
+          placeholder="Tusaale: Bakhaarka Xamdi, Suuqa Bakaaraha..."
+          value={form.marketName}
+          onChange={(e) => setForm({ ...form, marketName: e.target.value })}
+          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          required
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+          Talefanka / Nambarka Suuqa (Optional Contact)
+        </label>
+        <input
+          type="tel"
+          placeholder="Tusaale: 061XXXXXXX ama 062XXXXXXX"
+          value={form.supplierPhone}
+          onChange={(e) => setForm({ ...form, supplierPhone: e.target.value })}
+          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+          Alaabta la soo iibsaday / Faahfaahin *
+        </label>
+        <input
+          type="text"
+          placeholder="Tusaale: 5 Kiish oo Bariis ah, 2 Bareel Saliid ah..."
+          value={form.itemDescription}
+          onChange={(e) => setForm({ ...form, itemDescription: e.target.value })}
+          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          required
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-bold text-[#8E9297] mb-1">
+            Qiimaha Guud ($) *
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="0.00"
+            value={form.totalAmount}
+            onChange={(e) => setForm({ ...form, totalAmount: e.target.value })}
+            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-[#8E9297] mb-1">
+            Lacagta Hore loo Bixiyay ($)
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="0.00"
+            value={form.paidAmount}
+            onChange={(e) => setForm({ ...form, paidAmount: e.target.value })}
+            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+          Taariikhda Daynta
+        </label>
+        <input
+          type="date"
+          value={form.debtDate}
+          onChange={(e) => setForm({ ...form, debtDate: e.target.value })}
+          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+          Xusuusin / Qoraal Dheeraad ah
+        </label>
+        <textarea
+          placeholder="Faahfaahin ku saabsan ballanta bixinta..."
+          value={form.notes}
+          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          className="w-full px-3 py-2 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C] h-20"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold transition"
+        >
+          Kansal
+        </button>
+        <button
+          type="submit"
+          className="px-5 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md"
+        >
+          Kaydi Daynta
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function PayDebtForm({ modal, setModal, onSubmit, onCancel }) {
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div className="p-3 rounded-lg bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-xs font-semibold">
+        Bixinta Daynta Suuqa: <strong className="text-[#F4EFE6]">{modal.marketName}</strong>
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-[#8E9297] mb-1">
+          Lacagta la bixinayo ($) *
+        </label>
+        <input
+          type="number"
+          step="0.01"
+          placeholder="0.00"
+          value={modal.amount}
+          onChange={(e) => setModal({ ...modal, amount: e.target.value })}
+          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          required
+          autoFocus
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold transition"
+        >
+          Kansal
+        </button>
+        <button
+          type="submit"
+          className="px-5 py-2 rounded-md bg-[#22C55E] hover:bg-[#16A34A] text-[#111315] text-xs font-extrabold transition shadow-md"
+        >
+          Bixi Lacagta
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function DebtTable({ debts, filter, search, onPay, onDelete }) {
+  const filtered = useMemo(() => {
+    return debts.filter((d) => {
+      if (filter === "pending" && d.status === "paid") return false;
+      if (filter === "paid" && d.status !== "paid") return false;
+
+      if (search) {
+        const q = search.toLowerCase();
+        const m = (d.marketName || "").toLowerCase();
+        const i = (d.itemDescription || "").toLowerCase();
+        const p = (d.supplierPhone || "").toLowerCase();
+        return m.includes(q) || i.includes(q) || p.includes(q);
+      }
+
+      return true;
+    });
+  }, [debts, filter, search]);
+
+  if (filtered.length === 0) {
+    return <EmptyState text="Weli ma jiraan daymo laga diiwaan geliyay suuqyada." />;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-[#2A2E33]">
+      <table className="w-full text-left text-xs border-collapse">
+        <thead className="bg-[#22262A] text-[#8E9297] font-semibold border-b border-[#2A2E33]">
+          <tr>
+            <th className="py-3 px-4">Suuqa / Bakhaarka</th>
+            <th className="py-3 px-4">Alaabta / Raashinka</th>
+            <th className="py-3 px-4">Taariikhda</th>
+            <th className="py-3 px-4">Qiimaha Guud</th>
+            <th className="py-3 px-4">La Bixiyay</th>
+            <th className="py-3 px-4">Baaqiga Dhiman</th>
+            <th className="py-3 px-4">Xaaladda</th>
+            <th className="py-3 px-4 text-right">Hawgallada</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#2A2E33] bg-[#171A1D]">
+          {filtered.map((d) => {
+            const pending = Math.max(d.totalAmount - d.paidAmount, 0);
+            return (
+              <tr key={d.id} className="hover:bg-[#22262A]/40 transition">
+                <td className="py-3 px-4 font-bold text-[#F4EFE6]">
+                  <div>{d.marketName}</div>
+                  {d.supplierPhone && (
+                    <span className="text-[10px] text-[#8E9297] font-normal">📞 {d.supplierPhone}</span>
+                  )}
+                </td>
+                <td className="py-3 px-4 text-[#F4EFE6]">{d.itemDescription}</td>
+                <td className="py-3 px-4 text-[#8E9297]">{d.debtDate}</td>
+                <td className="py-3 px-4 font-bold text-[#F4EFE6]">{money(d.totalAmount)}</td>
+                <td className="py-3 px-4 text-[#22C55E] font-semibold">{money(d.paidAmount)}</td>
+                <td className="py-3 px-4 font-extrabold text-[#EF4444]">{money(pending)}</td>
+                <td className="py-3 px-4">
+                  {d.status === "paid" ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#22C55E]/15 text-[#22C55E] border border-[#22C55E]/30">
+                      ✓ La Bixiyay
+                    </span>
+                  ) : d.status === "partial" ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#C9A45C]/15 text-[#C9A45C] border border-[#C9A45C]/30">
+                      Qayb Bixis
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30">
+                      Laga Rabo
+                    </span>
+                  )}
+                </td>
+                <td className="py-3 px-4 text-right">
+                  <div className="flex items-center justify-end gap-2">
+                    {d.status !== "paid" && (
+                      <button
+                        onClick={() => onPay(d)}
+                        className="px-2.5 py-1 rounded bg-[#22C55E]/10 hover:bg-[#22C55E]/20 text-[#22C55E] font-bold text-[11px] border border-[#22C55E]/30 transition"
+                      >
+                        Bixi Dayn
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onDelete(d.id)}
+                      className="p-1 rounded text-[#8E9297] hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition"
+                      title="Tirtir"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
