@@ -12,7 +12,7 @@ export default function ExcelMarketGrid({ debts = [], onPay, onDelete, onEdit })
     return (
       <div className="p-8 text-center bg-slate-50/50 rounded-2xl border border-dashed border-slate-200 space-y-2">
         <p className="text-xs text-slate-500 font-medium">
-          Weli ma jiro iib ama dayn laga diiwaan geliyay suuqa ama bakhaarkan.
+          Wax xog ah lama helin maalintan.
         </p>
         <p className="text-[11px] text-slate-400">
           Isticmaal foomka sare si aad ugu soo darto iib ama dayn cusub.

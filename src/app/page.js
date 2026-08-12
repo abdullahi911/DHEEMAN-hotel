@@ -441,11 +441,18 @@ export default function Home() {
     }
   }, [markets, hydrated]);
 
+  // EXACT DAILY DATE FILTER
+  const filteredSales = sales.filter((s) => s?.date === reportDate);
+  const filteredExpenses = expenses.filter((e) => e?.date === reportDate);
+  const filteredUsage = usage.filter((u) => u?.date === reportDate);
+  const filteredDebts = debts.filter((d) => d?.debtDate === reportDate);
+  const filteredInventory = inventory.filter((i) => i?.stockedDate === reportDate);
+
   // Derived financial summary
   const summary = useMemo(() => {
-    const safeSales = Array.isArray(sales) ? sales : [];
-    const safeExpenses = Array.isArray(expenses) ? expenses : [];
-    const safeUsage = Array.isArray(usage) ? usage : [];
+    const safeSales = Array.isArray(filteredSales) ? filteredSales : [];
+    const safeExpenses = Array.isArray(filteredExpenses) ? filteredExpenses : [];
+    const safeUsage = Array.isArray(filteredUsage) ? filteredUsage : [];
 
     const totalSales = safeSales.reduce((acc, entry) => acc + (Number(entry?.amount) || 0), 0);
     const cashExpenses = safeExpenses
@@ -469,10 +476,10 @@ export default function Home() {
       grossProfit,
       netProfit,
     };
-  }, [sales, expenses, usage]);
+  }, [filteredSales, filteredExpenses, filteredUsage]);
 
   const debtSummary = useMemo(() => {
-    const safeDebts = Array.isArray(debts) ? debts : [];
+    const safeDebts = Array.isArray(filteredDebts) ? filteredDebts : [];
     const safeMarkets = Array.isArray(markets) ? markets : [];
     let totalOriginalDebt = 0;
     let totalPaidDebt = 0;
@@ -538,12 +545,12 @@ export default function Home() {
       marketCount: marketsList.length,
       marketsList,
     };
-  }, [debts, markets]);
+  }, [filteredDebts, markets]);
 
   // Combined transactions stream for recent activity
   const recentActivities = useMemo(() => {
-    const safeSales = Array.isArray(sales) ? sales : [];
-    const safeExpenses = Array.isArray(expenses) ? expenses : [];
+    const safeSales = Array.isArray(filteredSales) ? filteredSales : [];
+    const safeExpenses = Array.isArray(filteredExpenses) ? filteredExpenses : [];
     const list = [
       ...safeSales.filter(Boolean).map((s) => ({
         id: s?.id || crypto.randomUUID(),
@@ -564,8 +571,8 @@ export default function Home() {
     ];
 
     list.sort((a, b) => (b.date > a.date ? 1 : -1));
-    return list.slice(0, 8);
-  }, [sales, expenses]);
+    return list;
+  }, [filteredSales, filteredExpenses]);
 
   function openModal(type) {
     setDrawerType(type);
@@ -1446,7 +1453,11 @@ export default function Home() {
                   </button>
                 </div>
 
-                <ActivityTable activities={recentActivities} />
+                <ActivityTable 
+                  activities={recentActivities} 
+                  onDeleteSale={deleteSale}
+                  onDeleteExpense={deleteExpense}
+                />
               </div>
             </div>
           )}
@@ -1487,7 +1498,7 @@ export default function Home() {
               </div>
 
               <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
-                <ExpenseTable expenses={expenses} onDelete={deleteExpense} />
+                <ExpenseTable expenses={filteredExpenses} onDelete={deleteExpense} />
               </div>
             </div>
           )}
@@ -1520,7 +1531,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <InventoryTable inventory={inventory} onDelete={deleteStock} onUseStock={openModal} />
+              <InventoryTable inventory={filteredInventory} onDelete={deleteStock} onUseStock={openModal} />
             </div>
           )}
 
@@ -1545,7 +1556,7 @@ export default function Home() {
                     paid: 0,
                     count: 0,
                   };
-                  const currentMarketDebts = debts.filter(
+                  const currentMarketDebts = filteredDebts.filter(
                     (d) => (d.marketName || "").trim().toLowerCase() === selectedMarketName.toLowerCase()
                   );
 
@@ -1916,7 +1927,7 @@ export default function Home() {
 
                     {/* DEBTS TABLE */}
                     <DebtTable
-                      debts={debts}
+                      debts={filteredDebts}
                       filter={debtStatusFilter}
                       search={searchQuery}
                       onPay={(debt) => setPayDebtModal({ open: true, debtId: debt.id, amount: "", marketName: debt.marketName })}
@@ -2112,9 +2123,9 @@ export default function Home() {
 
 {/* SUB-COMPONENTS */ }
 
-function ActivityTable({ activities = [] }) {
+function ActivityTable({ activities = [], onDeleteSale, onDeleteExpense }) {
   if (activities.length === 0) {
-    return <EmptyState text="Weli ma jiraan hawgallo la diiwaan geliyay." />;
+    return <EmptyState text="Wax xog ah lama helin maalintan." />;
   }
 
   return (
@@ -2126,6 +2137,7 @@ function ActivityTable({ activities = [] }) {
             <th className="py-3.5 px-4">Qaybta</th>
             <th className="py-3.5 px-4">Faahfaahinta</th>
             <th className="py-3.5 px-4 text-right">Lacagta</th>
+            <th className="py-3.5 px-4 text-right">Hawlgallada (Actions)</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
@@ -2150,6 +2162,21 @@ function ActivityTable({ activities = [] }) {
               >
                 {act.typeCode === "revenue" ? `+${money(act.amount)}` : `-${money(act.amount)}`}
               </td>
+              <td className="py-3.5 px-4 text-right">
+                <button
+                  onClick={() => {
+                    if (act.typeCode === "revenue") {
+                      onDeleteSale && onDeleteSale(act.id);
+                    } else {
+                      onDeleteExpense && onDeleteExpense(act.id);
+                    }
+                  }}
+                  className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition inline-block"
+                  title="Tirtir"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -2160,7 +2187,7 @@ function ActivityTable({ activities = [] }) {
 
 function ExpenseTable({ expenses = [], onDelete }) {
   if (expenses.length === 0) {
-    return <EmptyState text="Weli ma jiraan kharashaad la diiwaan geliyay." />;
+    return <EmptyState text="Wax xog ah lama helin maalintan." />;
   }
 
   return (
@@ -2217,7 +2244,7 @@ function InventoryTable({ inventory = [], onDelete, onUseStock }) {
     return (
       <div className="p-8 text-center bg-white rounded-2xl border border-dashed border-slate-300 space-y-3">
         <BoxIcon className="w-10 h-10 text-slate-400 mx-auto opacity-50" />
-        <p className="text-xs text-slate-500 font-medium">Weli ma jiro alaab kayd ah oo la diiwaan geliyay.</p>
+        <p className="text-xs text-slate-500 font-medium">Wax xog ah lama helin maalintan.</p>
         <button
           onClick={() => onUseStock("stock")}
           className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/10"
@@ -2386,33 +2413,7 @@ function ProfitLossDashboard({ summary = {}, reportDate = "" }) {
           </div>
         </div>
 
-        {/* CARD 4: KHARASHAADKA KALE (OPERATING EXPENSES) - RED */}
-        <div className="p-6 rounded-2xl bg-red-50/60 border-2 border-red-200 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-red-200/80 pb-3">
-            <h3 className="text-sm font-extrabold text-red-800 uppercase tracking-wider flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-red-600"></span>
-              🔴 KHARASHKA KALE (OPERATING EXPENSES)
-            </h3>
-            <span className="text-[11px] font-extrabold text-red-700 bg-red-100 px-2.5 py-0.5 rounded-full">
-              Operating Outflow
-            </span>
-          </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 border-b border-red-100 pb-2">
-              <span>Kharashka Cesh-ka ah (Direct Cash Expenses)</span>
-              <span className="font-extrabold text-red-600">{money(summary.cashExpenses)}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 border-b border-red-100 pb-2">
-              <span>Kharashka Daynta ah (Debt Expenses)</span>
-              <span className="font-extrabold text-amber-600">{money(summary.debtExpenses)}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs font-extrabold text-red-800 pt-1">
-              <span>Wadarta Kharashka (Total Operating Expenses)</span>
-              <span className="text-base font-extrabold text-red-600">{money(summary.totalExpenses)}</span>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* HERO NET PROFIT SUMMARY CARD */}
@@ -2894,7 +2895,7 @@ function DebtTable({ debts, filter, search, onPay, onDelete, onEdit }) {
   }, [debts, filter, search]);
 
   if (filtered.length === 0) {
-    return <EmptyState text="Weli ma jiraan daymo laga diiwaan geliyay suuqyada." />;
+    return <EmptyState text="Wax xog ah lama helin maalintan." />;
   }
 
   return (
