@@ -10,6 +10,10 @@ import {
   signOutUser,
 } from "../lib/supabase";
 
+import MarketModal from "@/components/markets/MarketModal";
+import ExcelMarketGrid from "@/components/markets/ExcelMarketGrid";
+import EditDebtModal from "@/components/debts/EditDebtModal";
+
 const today = new Date().toISOString().slice(0, 10);
 
 const initialExpenses = [];
@@ -17,17 +21,18 @@ const initialInventory = [];
 const initialUsage = [];
 const initialSales = [];
 const initialDebts = [];
+const initialMarkets = [];
 
 const navItems = [
   { key: "dashboard", label: "Dashboard", sub: "Maamulka Maanta", icon: "grid" },
   { key: "expenses", label: "Kharash", sub: "Diiwaanka Kharashka", icon: "credit-card" },
   { key: "inventory", label: "Kayd", sub: "Alaabta & Raashinka", icon: "box" },
   { key: "debts", label: "Dayn & Suuqyo", sub: "Bakhaarrada & Daymaha", icon: "store" },
-  { key: "reports", label: "Warbixinno", sub: "Profit & Loss", icon: "pie-chart" },
+  { key: "reports", label: "Warbixinno", sub: "Profit & Loss Dashboard", icon: "pie-chart" },
 ];
 
 function money(value) {
-  const num = value || 0;
+  const num = Number(value) || 0;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -67,7 +72,17 @@ function exportDebtsToCSV(debts, todayStr = today) {
     return;
   }
 
-  const headers = ["Market Name", "Supplier Phone", "Products Purchased", "Total Amount ($)", "Paid Amount ($)", "Remaining Balance ($)", "Date", "Status", "Notes"];
+  const headers = [
+    "Market Name",
+    "Supplier Phone",
+    "Products Purchased",
+    "Total Amount ($)",
+    "Paid Amount ($)",
+    "Remaining Balance ($)",
+    "Date",
+    "Status",
+    "Notes",
+  ];
   const rows = safeDebts.map((d) => {
     if (!d) return [];
     const total = Number(d.totalAmount) || 0;
@@ -86,7 +101,9 @@ function exportDebtsToCSV(debts, todayStr = today) {
     ];
   });
 
-  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+  const csvContent =
+    "data:text/csv;charset=utf-8," +
+    [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
   const encodedUri = encodeURI(csvContent);
   const link = document.createElement("a");
   link.setAttribute("href", encodedUri);
@@ -104,16 +121,39 @@ export default function Home() {
   const [usage, setUsage] = useState(initialUsage);
   const [sales, setSales] = useState(initialSales);
   const [debts, setDebts] = useState(initialDebts);
+  const [markets, setMarkets] = useState(initialMarkets);
   const [hydrated, setHydrated] = useState(false);
 
   // UI Interactive States
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerType, setDrawerType] = useState(null); // 'expense' | 'stock' | 'useStock' | 'sale' | 'debt'
   const [searchQuery, setSearchQuery] = useState("");
-  const [chartPeriod, setChartPeriod] = useState("7d");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState("all");
   const [debtStatusFilter, setDebtStatusFilter] = useState("all"); // 'all' | 'pending' | 'paid'
+  const [selectedMarketName, setSelectedMarketName] = useState(null);
+  const [marketForm, setMarketForm] = useState({ id: null, name: "", productName: "", phone: "", purchaseAmount: "", notes: "" });
+  const [isMarketModalOpen, setIsMarketModalOpen] = useState(false);
+
+  // Edit Debt Modal State
+  const [editDebtModal, setEditDebtModal] = useState({ open: false, debt: null });
+  const [editDebtForm, setEditDebtForm] = useState({
+    id: "",
+    marketName: "",
+    supplierPhone: "",
+    itemDescription: "",
+    totalAmount: "",
+    paidAmount: "",
+    debtDate: today,
+    notes: "",
+  });
+
+  // Pay Debt Modal State
+  const [payDebtModal, setPayDebtModal] = useState({
+    open: false,
+    debtId: null,
+    amount: "",
+    marketName: "",
+  });
 
   // Auth State (Supabase + Local Fallback)
   const [userSession, setUserSession] = useState(null);
@@ -156,8 +196,49 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
+  const handleSignIn = async (e) => {
+    e.preventDefault();
+    setAuthError("");
+    if (!hasSupabaseConfig) {
+      const mockSession = { user: { email: authEmail || "admin@dheeman.com" } };
+      localStorage.setItem("dheeman-local-auth", JSON.stringify(mockSession));
+      setLocalSession(mockSession);
+      return;
+    }
+
+    const { error } = await signInWithEmail(authEmail, authPassword);
+    if (error) setAuthError(error.message);
+  };
+
+  const handleSignUp = async (e) => {
+    e.preventDefault();
+    setAuthError("");
+    if (!hasSupabaseConfig) {
+      const mockSession = { user: { email: authEmail || "admin@dheeman.com" } };
+      localStorage.setItem("dheeman-local-auth", JSON.stringify(mockSession));
+      setLocalSession(mockSession);
+      return;
+    }
+
+    const { error } = await signUpWithEmail(authEmail, authPassword);
+    if (error) setAuthError(error.message);
+    else alert("Fadlan eeg email-kaaga si aad u xaqijiso akownka.");
+  };
+
+  const handleGoogleSignIn = async () => {
+    setAuthError("");
+    if (!hasSupabaseConfig) {
+      const mockSession = { user: { email: "google-manager@dheeman.com" } };
+      localStorage.setItem("dheeman-local-auth", JSON.stringify(mockSession));
+      setLocalSession(mockSession);
+      return;
+    }
+    const { error } = await signInWithGoogle();
+    if (error) setAuthError(error.message);
+  };
+
   const handleSignOut = async () => {
-    if (supabase) {
+    if (supabase && userSession) {
       await signOutUser();
     }
     setUserSession(null);
@@ -293,99 +374,171 @@ export default function Home() {
     debtDate: today,
     notes: "",
   });
-  const [payDebtModal, setPayDebtModal] = useState({
-    open: false,
-    debtId: null,
-    amount: "",
-    marketName: "",
-  });
 
+  // Hydrate local state for offline/fallback storage
   useEffect(() => {
-    if (window.localStorage.getItem("dheeman-data-version") !== "2") {
-      ["expenses", "inventory", "usage", "sales", "debts"].forEach((key) => {
-        window.localStorage.removeItem(`dheeman-${key}`);
-      });
-      window.localStorage.setItem("dheeman-data-version", "2");
-    }
-
     setExpenses(readStored("dheeman-expenses", initialExpenses));
     setInventory(readStored("dheeman-inventory", initialInventory));
     setUsage(readStored("dheeman-usage", initialUsage));
     setSales(readStored("dheeman-sales", initialSales));
     setDebts(readStored("dheeman-debts", initialDebts));
+    setMarkets(readStored("dheeman-markets", initialMarkets));
     setHydrated(true);
   }, []);
 
+  // Save to LocalStorage when hydrated
   useEffect(() => {
-    if (hydrated) {
+    if (!hydrated) return;
+    try {
       window.localStorage.setItem("dheeman-expenses", JSON.stringify(expenses));
+    } catch (e) {
+      console.error(e);
     }
   }, [expenses, hydrated]);
 
   useEffect(() => {
-    if (hydrated) {
+    if (!hydrated) return;
+    try {
       window.localStorage.setItem("dheeman-inventory", JSON.stringify(inventory));
+    } catch (e) {
+      console.error(e);
     }
-  }, [hydrated, inventory]);
+  }, [inventory, hydrated]);
 
   useEffect(() => {
-    if (hydrated) {
+    if (!hydrated) return;
+    try {
       window.localStorage.setItem("dheeman-usage", JSON.stringify(usage));
+    } catch (e) {
+      console.error(e);
     }
-  }, [hydrated, usage]);
+  }, [usage, hydrated]);
 
   useEffect(() => {
-    if (hydrated) {
+    if (!hydrated) return;
+    try {
       window.localStorage.setItem("dheeman-sales", JSON.stringify(sales));
+    } catch (e) {
+      console.error(e);
     }
-  }, [hydrated, sales]);
+  }, [sales, hydrated]);
 
   useEffect(() => {
-    if (hydrated) {
+    if (!hydrated) return;
+    try {
       window.localStorage.setItem("dheeman-debts", JSON.stringify(debts));
+    } catch (e) {
+      console.error(e);
     }
   }, [debts, hydrated]);
 
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem("dheeman-markets", JSON.stringify(markets));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [markets, hydrated]);
+
+  // Derived financial summary
   const summary = useMemo(() => {
-    const dailyExpenses = expenses.filter((entry) => entry.date === reportDate);
-    const dailyUsage = usage.filter((entry) => entry.date === reportDate);
-    const dailySales = sales.filter((entry) => entry.date === reportDate);
-    const revenue = dailySales.reduce((sum, entry) => sum + entry.amount, 0);
-    const cashSpent = dailyExpenses
-      .filter((entry) => entry.type === "cash")
-      .reduce((sum, entry) => sum + entry.amount, 0);
-    const debt = dailyExpenses
-      .filter((entry) => entry.type === "debt")
-      .reduce((sum, entry) => sum + entry.amount, 0);
-    const usedStockCost = dailyUsage.reduce((sum, entry) => sum + entry.cost, 0);
-    const profit = revenue - cashSpent - debt - usedStockCost;
+    const safeSales = Array.isArray(sales) ? sales : [];
+    const safeExpenses = Array.isArray(expenses) ? expenses : [];
+    const safeUsage = Array.isArray(usage) ? usage : [];
+
+    const totalSales = safeSales.reduce((acc, entry) => acc + (Number(entry?.amount) || 0), 0);
+    const cashExpenses = safeExpenses
+      .filter((entry) => entry && entry.type === "cash")
+      .reduce((acc, entry) => acc + (Number(entry?.amount) || 0), 0);
+    const debtExpenses = safeExpenses
+      .filter((entry) => entry && entry.type === "debt")
+      .reduce((acc, entry) => acc + (Number(entry?.amount) || 0), 0);
+    const totalExpenses = cashExpenses + debtExpenses;
+    const inventoryCost = safeUsage.reduce((acc, entry) => acc + (Number(entry?.cost) || 0), 0);
+
+    const grossProfit = totalSales - inventoryCost;
+    const netProfit = totalSales - cashExpenses - inventoryCost;
 
     return {
-      revenue,
-      cashSpent,
-      debt,
-      usedStockCost,
-      profit,
-      dailyExpenses,
-      dailyUsage,
-      dailySales,
+      totalSales,
+      cashExpenses,
+      debtExpenses,
+      totalExpenses,
+      inventoryCost,
+      grossProfit,
+      netProfit,
     };
-  }, [expenses, reportDate, sales, usage]);
+  }, [sales, expenses, usage]);
 
-  const inventoryTotals = useMemo(() => {
-    return inventory.reduce(
-      (totals, item) => {
-        const remaining = Math.max(item.stocked - item.used, 0);
-        totals.remaining += remaining;
-        totals.value += remaining * item.unitCost;
-        totals.usedCost += item.used * item.unitCost;
-        if (remaining === 0) totals.outOfStock += 1;
-        else if (remaining <= 3) totals.lowStock += 1;
-        return totals;
-      },
-      { remaining: 0, value: 0, usedCost: 0, lowStock: 0, outOfStock: 0 }
-    );
-  }, [inventory]);
+  const debtSummary = useMemo(() => {
+    const safeDebts = Array.isArray(debts) ? debts : [];
+    const safeMarkets = Array.isArray(markets) ? markets : [];
+    let totalOriginalDebt = 0;
+    let totalPaidDebt = 0;
+    let totalPendingDebt = 0;
+    const marketMap = {};
+
+    safeMarkets.forEach((m) => {
+      if (!m || !m.name) return;
+      const mName = m.name.trim();
+      const pAmt = Number(m.purchaseAmount) || Number(m.address) || 0;
+      marketMap[mName] = {
+        id: m.id,
+        name: mName,
+        phone: m.phone || "",
+        purchaseAmount: pAmt,
+        notes: m.notes || "",
+        count: 0,
+        pending: 0,
+        total: 0,
+        paid: 0,
+      };
+    });
+
+    safeDebts.forEach((d) => {
+      if (!d) return;
+      const total = Number(d.totalAmount) || 0;
+      const paid = Number(d.paidAmount) || 0;
+      const pending = Math.max(total - paid, 0);
+
+      totalOriginalDebt += total;
+      totalPaidDebt += paid;
+      totalPendingDebt += pending;
+
+      const mName = d.marketName ? d.marketName.trim() : "Suuq Guud";
+      if (!marketMap[mName]) {
+        marketMap[mName] = {
+          id: crypto.randomUUID(),
+          name: mName,
+          phone: d.supplierPhone || "",
+          purchaseAmount: total,
+          notes: "",
+          count: 0,
+          pending: 0,
+          total: 0,
+          paid: 0,
+        };
+      }
+      marketMap[mName].count += 1;
+      marketMap[mName].pending += pending;
+      marketMap[mName].total += total;
+      marketMap[mName].paid += paid;
+      if (!marketMap[mName].phone && d.supplierPhone) {
+        marketMap[mName].phone = d.supplierPhone;
+      }
+    });
+
+    const marketsList = Object.values(marketMap);
+
+    return {
+      totalOriginalDebt,
+      totalPaidDebt,
+      totalPendingDebt,
+      marketCount: marketsList.length,
+      marketsList,
+    };
+  }, [debts, markets]);
 
   // Combined transactions stream for recent activity
   const recentActivities = useMemo(() => {
@@ -399,118 +552,20 @@ export default function Home() {
         type: "Dakhli",
         typeCode: "revenue",
         amount: Number(s?.amount) || 0,
-        status: "La xaqiijiyay",
       })),
       ...safeExpenses.filter(Boolean).map((e) => ({
         id: e?.id || crypto.randomUUID(),
         date: e?.date || today,
-        detail: e?.item || "Expense Item",
-        type: e?.type === "debt" ? "Dayn" : "Kharash",
-        typeCode: e?.type || "cash",
-        amount: -(Number(e?.amount) || 0),
-        status: e?.type === "debt" ? "Baqi ku ah" : "La bixiyay",
+        detail: `${e?.item || "Expense"} (${e?.type === "cash" ? "Cesh" : "Dayn"})`,
+        type: "Kharash",
+        typeCode: "expense",
+        amount: Number(e?.amount) || 0,
       })),
     ];
-    list.sort((a, b) => ((a.date || "") < (b.date || "") ? 1 : -1));
-    return searchQuery
-      ? list.filter((item) => String(item?.detail || "").toLowerCase().includes(String(searchQuery).toLowerCase()))
-      : list;
-  }, [sales, expenses, searchQuery]);
 
-  // Real Financial Chart Data aggregated per actual date in period
-  const chartData = useMemo(() => {
-    const somaliDays = ["Axad", "Isniin", "Talaado", "Arbaco", "Khamiis", "Jimce", "Sabti"];
-    const result = [];
-    const safeSales = Array.isArray(sales) ? sales : [];
-    const safeExpenses = Array.isArray(expenses) ? expenses : [];
-    const validBaseDate = reportDate ? new Date(reportDate) : new Date();
-    const baseDate = isNaN(validBaseDate.getTime()) ? new Date() : validBaseDate;
-
-    if (chartPeriod === "7d") {
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(baseDate);
-        d.setDate(d.getDate() - i);
-        const dStr = d.toISOString().slice(0, 10);
-        const dayName = somaliDays[d.getDay()];
-
-        const rev = safeSales
-          .filter((s) => s && s.date === dStr)
-          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
-        const exp = safeExpenses
-          .filter((e) => e && e.date === dStr)
-          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
-
-        result.push({
-          date: dStr,
-          day: dayName,
-          rev,
-          exp,
-        });
-      }
-    } else if (chartPeriod === "30d") {
-      for (let i = 29; i >= 0; i -= 4) {
-        const d = new Date(baseDate);
-        d.setDate(d.getDate() - i);
-        const dStr = d.toISOString().slice(0, 10);
-
-        const rev = safeSales
-          .filter((s) => s && s.date === dStr)
-          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
-        const exp = safeExpenses
-          .filter((e) => e && e.date === dStr)
-          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
-
-        result.push({
-          date: dStr,
-          day: dStr.slice(5),
-          rev,
-          exp,
-        });
-      }
-    } else if (chartPeriod === "3m") {
-      for (let i = 11; i >= 0; i--) {
-        const d = new Date(baseDate);
-        d.setDate(d.getDate() - i * 7);
-        const dStr = d.toISOString().slice(0, 10);
-
-        const rev = safeSales
-          .filter((s) => s && s.date === dStr)
-          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
-        const exp = safeExpenses
-          .filter((e) => e && e.date === dStr)
-          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
-
-        result.push({
-          date: dStr,
-          day: `W${12 - i}`,
-          rev,
-          exp,
-        });
-      }
-    } else {
-      for (let i = 11; i >= 0; i--) {
-        const d = new Date(baseDate);
-        d.setMonth(d.getMonth() - i);
-        const monthStr = d.toISOString().slice(0, 7);
-
-        const rev = safeSales
-          .filter((s) => s && s.date && String(s.date).startsWith(monthStr))
-          .reduce((sum, s) => sum + (Number(s?.amount) || 0), 0);
-        const exp = safeExpenses
-          .filter((e) => e && e.date && String(e.date).startsWith(monthStr))
-          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
-
-        result.push({
-          date: monthStr,
-          day: d.toLocaleString("default", { month: "short" }),
-          rev,
-          exp,
-        });
-      }
-    }
-
-    return result;
-  }, [sales, expenses, reportDate, chartPeriod]);
+    list.sort((a, b) => (b.date > a.date ? 1 : -1));
+    return list.slice(0, 8);
+  }, [sales, expenses]);
 
   function openModal(type) {
     setDrawerType(type);
@@ -532,11 +587,17 @@ export default function Home() {
       item: expenseForm.item,
       amount: numberValue(expenseForm.amount),
       date: expenseForm.date || today,
-      note: expenseForm.note || "",
+      note: expenseForm.note,
     };
 
     setExpenses((current) => [newExpense, ...current]);
-    setExpenseForm({ type: "cash", item: "", amount: "", date: today, note: "" });
+    setExpenseForm({
+      type: "cash",
+      item: "",
+      amount: "",
+      date: today,
+      note: "",
+    });
     closeModal();
 
     if (supabase && userSession?.user) {
@@ -554,9 +615,9 @@ export default function Home() {
 
   async function handleAddStock(event) {
     event.preventDefault();
-    if (!stockForm.item || !stockForm.stocked || !stockForm.unitCost) return;
+    if (!stockForm.item || !stockForm.stocked) return;
 
-    const nextStock = {
+    const newStock = {
       id: crypto.randomUUID(),
       item: stockForm.item,
       unit: stockForm.unit || "kiish",
@@ -567,61 +628,64 @@ export default function Home() {
       finishedDate: "",
     };
 
-    setInventory((current) => [nextStock, ...current]);
-    setUsageForm((current) => ({ ...current, stockId: nextStock.id }));
-    setStockForm({ item: "", unit: "kiish", stocked: "", unitCost: "", stockedDate: today });
+    setInventory((current) => [newStock, ...current]);
+    setStockForm({
+      item: "",
+      unit: "kiish",
+      stocked: "",
+      unitCost: "",
+      stockedDate: today,
+    });
     closeModal();
 
     if (supabase && userSession?.user) {
       await supabase.from("inventory_items").insert({
-        id: nextStock.id,
+        id: newStock.id,
         user_id: userSession.user.id,
-        item: nextStock.item,
-        unit: nextStock.unit,
-        stocked: nextStock.stocked,
+        item: newStock.item,
+        unit: newStock.unit,
+        stocked: newStock.stocked,
         used: 0,
-        unit_cost: nextStock.unitCost,
-        stocked_date: nextStock.stockedDate,
+        unit_cost: newStock.unitCost,
+        stocked_date: newStock.stockedDate,
       });
     }
   }
 
   async function handleUseStock(event) {
     event.preventDefault();
-    const selected = inventory.find((item) => item.id === usageForm.stockId);
-    const quantity = numberValue(usageForm.quantity);
+    if (!usageForm.stockId || !usageForm.quantity) return;
 
-    if (!selected || quantity <= 0) return;
+    const selectedStock = inventory.find((i) => i.id === usageForm.stockId);
+    if (!selectedStock) return;
 
-    const remaining = Math.max(selected.stocked - selected.used, 0);
-    const safeQuantity = Math.min(quantity, remaining);
-    if (safeQuantity <= 0) return;
+    const usedQty = numberValue(usageForm.quantity);
+    const addedUsed = selectedStock.used + usedQty;
 
-    const nextUsed = selected.used + safeQuantity;
-    const finDate = nextUsed >= selected.stocked ? (usageForm.date || today) : selected.finishedDate;
-
-    setInventory((current) =>
-      current.map((item) => {
-        if (item.id !== selected.id) return item;
+    const updatedInventory = inventory.map((i) => {
+      if (i.id === usageForm.stockId) {
+        const isFinished = addedUsed >= i.stocked;
         return {
-          ...item,
-          used: nextUsed,
-          finishedDate: finDate,
+          ...i,
+          used: addedUsed,
+          finishedDate: isFinished ? usageForm.date || today : i.finishedDate,
         };
-      })
-    );
+      }
+      return i;
+    });
 
-    const newUsage = {
+    const newUsageRecord = {
       id: crypto.randomUUID(),
-      item: selected.item,
-      quantity: safeQuantity,
-      unit: selected.unit,
-      cost: safeQuantity * selected.unitCost,
+      item: selectedStock.item,
+      quantity: usedQty,
+      unit: selectedStock.unit,
+      cost: usedQty * selectedStock.unitCost,
       date: usageForm.date || today,
     };
 
-    setUsage((current) => [newUsage, ...current]);
-    setUsageForm((current) => ({ ...current, quantity: "" }));
+    setInventory(updatedInventory);
+    setUsage((current) => [newUsageRecord, ...current]);
+    setUsageForm({ stockId: "", quantity: "", date: today });
     closeModal();
 
     if (supabase && userSession?.user) {
@@ -629,19 +693,19 @@ export default function Home() {
         supabase
           .from("inventory_items")
           .update({
-            used: nextUsed,
-            finished_date: finDate,
+            used: addedUsed,
+            finished_date: addedUsed >= selectedStock.stocked ? usageForm.date || today : null,
           })
-          .eq("id", selected.id),
+          .eq("id", selectedStock.id),
         supabase.from("inventory_usage").insert({
-          id: newUsage.id,
+          id: newUsageRecord.id,
           user_id: userSession.user.id,
-          inventory_item_id: selected.id,
-          item: newUsage.item,
-          quantity: newUsage.quantity,
-          unit: newUsage.unit,
-          cost: newUsage.cost,
-          usage_date: newUsage.date,
+          inventory_item_id: selectedStock.id,
+          item: newUsageRecord.item,
+          quantity: newUsageRecord.quantity,
+          unit: newUsageRecord.unit,
+          cost: newUsageRecord.cost,
+          usage_date: newUsageRecord.date,
         }),
       ]);
     }
@@ -659,7 +723,11 @@ export default function Home() {
     };
 
     setSales((current) => [newSale, ...current]);
-    setSaleForm({ item: "", amount: "", date: today });
+    setSaleForm({
+      item: "",
+      amount: "",
+      date: today,
+    });
     closeModal();
 
     if (supabase && userSession?.user) {
@@ -674,29 +742,35 @@ export default function Home() {
   }
 
   async function deleteExpense(id) {
-    setExpenses((current) => current.filter((entry) => entry.id !== id));
-    if (supabase && userSession?.user) {
-      await supabase.from("expenses").delete().eq("id", id);
+    if (confirm("Ma ziadaa in aad masaxdo kharashkan?")) {
+      setExpenses((current) => current.filter((entry) => entry.id !== id));
+      if (supabase && userSession?.user) {
+        await supabase.from("expenses").delete().eq("id", id);
+      }
     }
   }
 
   async function deleteSale(id) {
-    setSales((current) => current.filter((entry) => entry.id !== id));
-    if (supabase && userSession?.user) {
-      await supabase.from("sales").delete().eq("id", id);
+    if (confirm("Ma ziadaa in aad masaxdo iibkan?")) {
+      setSales((current) => current.filter((entry) => entry.id !== id));
+      if (supabase && userSession?.user) {
+        await supabase.from("sales").delete().eq("id", id);
+      }
     }
   }
 
   async function deleteStock(id) {
-    const selected = inventory.find((item) => item.id === id);
-    setInventory((current) => current.filter((item) => item.id !== id));
-    if (selected) {
-      setUsage((current) => current.filter((entry) => entry.item !== selected.item));
-    }
-    setUsageForm((current) => ({ ...current, stockId: "" }));
+    if (confirm("Ma ziadaa in aad masaxdo alaabtan kaydka ah?")) {
+      const selected = inventory.find((item) => item.id === id);
+      setInventory((current) => current.filter((item) => item.id !== id));
+      if (selected) {
+        setUsage((current) => current.filter((entry) => entry.item !== selected.item));
+      }
+      setUsageForm((current) => ({ ...current, stockId: "" }));
 
-    if (supabase && userSession?.user) {
-      await supabase.from("inventory_items").delete().eq("id", id);
+      if (supabase && userSession?.user) {
+        await supabase.from("inventory_items").delete().eq("id", id);
+      }
     }
   }
 
@@ -715,7 +789,7 @@ export default function Home() {
 
     const newDebt = {
       id: crypto.randomUUID(),
-      marketName: debtForm.marketName,
+      marketName: debtForm.marketName.trim(),
       supplierPhone: debtForm.supplierPhone || "",
       itemDescription: debtForm.itemDescription,
       totalAmount: total,
@@ -726,6 +800,23 @@ export default function Home() {
     };
 
     setDebts((current) => [newDebt, ...current]);
+    const trimmedMName = debtForm.marketName.trim();
+    setMarkets((prev) => {
+      if (!prev.some((m) => m.name.toLowerCase() === trimmedMName.toLowerCase())) {
+        return [
+          {
+            id: crypto.randomUUID(),
+            name: trimmedMName,
+            phone: debtForm.supplierPhone || "",
+            purchaseAmount: total,
+            notes: "",
+          },
+          ...prev,
+        ];
+      }
+      return prev;
+    });
+
     setDebtForm({
       marketName: "",
       supplierPhone: "",
@@ -750,6 +841,107 @@ export default function Home() {
         status: newDebt.status,
         notes: newDebt.notes,
       });
+    }
+  }
+
+  async function handleAddMarketSubmit(event) {
+    event.preventDefault();
+    if (!marketForm.name) return;
+
+    const trimmedName = marketForm.name.trim();
+    const prodName = (marketForm.productName || marketForm.itemDescription || "").trim();
+    const purchaseAmt = numberValue(marketForm.purchaseAmount || marketForm.address);
+    const newMarket = {
+      id: marketForm.id || crypto.randomUUID(),
+      name: trimmedName,
+      productName: prodName,
+      phone: marketForm.phone || "",
+      purchaseAmount: purchaseAmt,
+      address: String(purchaseAmt),
+      notes: marketForm.notes || "",
+    };
+
+    setMarkets((prev) => {
+      const exists = prev.some((m) => m.name.toLowerCase() === trimmedName.toLowerCase());
+      if (exists) {
+        return prev.map((m) => (m.name.toLowerCase() === trimmedName.toLowerCase() ? { ...m, ...newMarket } : m));
+      }
+      return [newMarket, ...prev];
+    });
+
+    if (purchaseAmt > 0 && prodName) {
+      const newDebtRecord = {
+        id: crypto.randomUUID(),
+        marketName: trimmedName,
+        supplierPhone: newMarket.phone,
+        itemDescription: prodName,
+        totalAmount: purchaseAmt,
+        paidAmount: 0,
+        debtDate: today,
+        status: "pending",
+        notes: marketForm.notes || "",
+      };
+      setDebts((prev) => [newDebtRecord, ...prev]);
+
+      if (supabase && userSession?.user) {
+        try {
+          await supabase.from("debts").insert({
+            id: newDebtRecord.id,
+            user_id: userSession.user.id,
+            market_name: newDebtRecord.marketName,
+            supplier_phone: newDebtRecord.supplierPhone,
+            item_description: newDebtRecord.itemDescription,
+            total_amount: newDebtRecord.totalAmount,
+            paid_amount: newDebtRecord.paidAmount,
+            debt_date: newDebtRecord.debtDate,
+            status: newDebtRecord.status,
+            notes: newDebtRecord.notes,
+          });
+        } catch (err) {
+          console.error("Supabase debt operation handled gracefully:", err);
+        }
+      }
+    }
+
+    setSelectedMarketName(trimmedName);
+    setIsMarketModalOpen(false);
+    setMarketForm({ id: null, name: "", productName: "", phone: "", purchaseAmount: "", notes: "" });
+
+    if (supabase && userSession?.user) {
+      try {
+        await supabase.from("markets").upsert({
+          id: newMarket.id,
+          user_id: userSession.user.id,
+          name: newMarket.name,
+          phone: newMarket.phone,
+          address: newMarket.address,
+          notes: newMarket.notes,
+        });
+      } catch (err) {
+        console.error("Supabase market operation handled gracefully:", err);
+      }
+    }
+  }
+
+  function handleEditMarketClick(market) {
+    setMarketForm({
+      id: market.id || crypto.randomUUID(),
+      name: market.name || "",
+      productName: market.productName || market.itemDescription || "",
+      phone: market.phone || "",
+      purchaseAmount: market.purchaseAmount ?? market.address ?? "",
+      notes: market.notes || "",
+    });
+    setIsMarketModalOpen(true);
+  }
+
+  function deleteMarket(marketName) {
+    if (confirm(`Ma dhab baa in aad masaxdo suuqa "${marketName}"?`)) {
+      setMarkets((prev) => prev.filter((m) => m.name.toLowerCase() !== marketName.toLowerCase()));
+      setDebts((prev) => prev.filter((d) => (d.marketName || "").trim().toLowerCase() !== marketName.toLowerCase()));
+      if (selectedMarketName?.toLowerCase() === marketName.toLowerCase()) {
+        setSelectedMarketName(null);
+      }
     }
   }
 
@@ -790,8 +982,69 @@ export default function Home() {
     }
   }
 
+  async function handleEditDebtSubmit(event) {
+    event.preventDefault();
+    if (!editDebtForm.id || !editDebtForm.marketName || !editDebtForm.itemDescription) return;
+
+    const total = numberValue(editDebtForm.totalAmount);
+    const paid = numberValue(editDebtForm.paidAmount);
+    let status = "pending";
+    if (paid >= total && total > 0) {
+      status = "paid";
+    } else if (paid > 0) {
+      status = "partial";
+    }
+
+    const updatedDebt = {
+      id: editDebtForm.id,
+      marketName: editDebtForm.marketName.trim(),
+      supplierPhone: editDebtForm.supplierPhone || "",
+      itemDescription: editDebtForm.itemDescription,
+      totalAmount: total,
+      paidAmount: paid,
+      debtDate: editDebtForm.debtDate || today,
+      status: status,
+      notes: editDebtForm.notes || "",
+    };
+
+    setDebts((current) =>
+      current.map((d) => (d.id === editDebtForm.id ? updatedDebt : d))
+    );
+    setEditDebtModal({ open: false, debt: null });
+
+    if (supabase && userSession?.user) {
+      await supabase
+        .from("debts")
+        .update({
+          market_name: updatedDebt.marketName,
+          supplier_phone: updatedDebt.supplierPhone,
+          item_description: updatedDebt.itemDescription,
+          total_amount: updatedDebt.totalAmount,
+          paid_amount: updatedDebt.paidAmount,
+          debt_date: updatedDebt.debtDate,
+          status: updatedDebt.status,
+          notes: updatedDebt.notes,
+        })
+        .eq("id", updatedDebt.id);
+    }
+  }
+
+  function openEditDebtModal(debt) {
+    setEditDebtForm({
+      id: debt.id,
+      marketName: debt.marketName || "",
+      supplierPhone: debt.supplierPhone || "",
+      itemDescription: debt.itemDescription || "",
+      totalAmount: debt.totalAmount || "",
+      paidAmount: debt.paidAmount || "",
+      debtDate: debt.debtDate || today,
+      notes: debt.notes || "",
+    });
+    setEditDebtModal({ open: true, debt });
+  }
+
   async function deleteDebt(id) {
-    if (confirm("Ma ziada in aad masaxdo dayntan?")) {
+    if (confirm("Ma ziadaa in aad masaxdo dayntan?")) {
       setDebts((current) => current.filter((d) => d.id !== id));
       if (supabase && userSession?.user) {
         await supabase.from("debts").delete().eq("id", id);
@@ -799,176 +1052,114 @@ export default function Home() {
     }
   }
 
-  function clearAllData() {
-    if (confirm("Ma ziada in aad masaxdo dhammaan xogta?")) {
-      setExpenses([]);
-      setInventory([]);
-      setUsage([]);
-      setSales([]);
-      setDebts([]);
-      setUsageForm((current) => ({ ...current, stockId: "" }));
-    }
-  }
-
   const activeNav = navItems.find((item) => item.key === activeTab);
 
+  // Authentication View
   if (!isLoggedIn && !authLoading) {
     return (
-      <div className="min-h-screen bg-[#111315] text-[#F4EFE6] flex items-center justify-center p-4 selection:bg-[#C9A45C] selection:text-[#111315]">
-        <div className="w-full max-w-md bg-[#171A1D] border border-[#2A2E33] rounded-xl shadow-2xl p-8 space-y-6">
+      <div className="min-h-screen bg-slate-100 text-slate-900 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-xl p-8 space-y-6">
           <div className="text-center space-y-3">
-            <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-[#22262A] to-[#111315] border border-[#C9A45C]/50 flex items-center justify-center text-[#C9A45C] mx-auto shadow-lg shadow-[#C9A45C]/10">
+            <div className="h-14 w-14 rounded-2xl bg-blue-600 flex items-center justify-center text-white mx-auto shadow-lg shadow-blue-500/20">
               <CrownIcon className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-2xl font-extrabold text-[#F4EFE6] tracking-tight uppercase">Dheeman</h1>
-              <p className="text-xs text-[#C9A45C] font-bold tracking-widest uppercase mt-0.5">
-                Restaurant Management
+              <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight uppercase">Dheeman</h1>
+              <p className="text-xs text-blue-600 font-bold tracking-widest uppercase mt-0.5">
+                Restaurant Management System
               </p>
             </div>
 
             {/* CONNECTION STATUS BADGE */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold border mx-auto">
               {hasSupabaseConfig ? (
-                <span className="flex items-center gap-1.5 text-[#10B981] bg-[#10B981]/10 px-2.5 py-0.5 rounded-full border border-[#10B981]/20">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse"></span>
+                <span className="flex items-center gap-1.5 text-emerald-700 bg-emerald-50 px-3 py-0.5 rounded-full border border-emerald-200">
+                  <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse"></span>
                   Supabase Cloud Connected
                 </span>
               ) : (
-                <span className="flex items-center gap-1.5 text-[#C9A45C] bg-[#C9A45C]/10 px-2.5 py-0.5 rounded-full border border-[#C9A45C]/20">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#C9A45C]"></span>
-                  Local Manager Mode (Vercel)
+                <span className="flex items-center gap-1.5 text-blue-700 bg-blue-50 px-3 py-0.5 rounded-full border border-blue-200">
+                  <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                  Local Manager Mode
                 </span>
               )}
             </div>
 
-            <p className="text-xs text-[#8E9297] pt-1">
-              Fadlan soo gal si aad u gasho maamulka meheraddaada.
+            <p className="text-xs text-slate-500 pt-1">
+              Soo gal si aad u maamusho dakhliga, kharashka, alaabta kaydka, iyo daymaha suuqyada.
             </p>
           </div>
 
-          {!hasSupabaseConfig && (
-            <div className="p-3 rounded-lg bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-[11px] space-y-1">
-              <p className="font-bold">💡 Ogeysiis Vercel Deployment:</p>
-              <p className="text-[#8E9297]">
-                Supabase Environment Variables-ka ayaan weli lagu meelayn Vercel Settings. Waxaad ku soo gali kartaa email iyo password maxalli ah. Si cloud-ka loo furo, raac faylka <code className="text-[#C9A45C]">.env.example</code>.
-              </p>
-            </div>
-          )}
-
           {authError && (
-            <div className="p-3 rounded-md bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs font-semibold text-center">
+            <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold text-center">
               {authError}
             </div>
           )}
 
-          {/* GOOGLE / GMAIL OAUTH BUTTON */}
-          <button
-            type="button"
-            onClick={async () => {
-              setAuthError("");
-              if (!hasSupabaseConfig) {
-                setAuthError("Google Login wuxuu u baahan yahay Supabase keys ku jira Vercel Environment Variables.");
-                return;
-              }
-              const res = await signInWithGoogle();
-              if (res?.error) setAuthError(res.error.message);
-            }}
-            className="w-full py-3 px-4 rounded-lg bg-[#22262A] hover:bg-[#2A2E33] border border-[#2A2E33] hover:border-[#C9A45C]/50 text-[#F4EFE6] font-bold text-xs flex items-center justify-center gap-3 transition shadow-sm"
-          >
-            <GoogleIcon className="w-5 h-5" />
-            <span>Gmail / Google Ku Soo Gal</span>
-          </button>
-
-          <div className="relative flex items-center justify-center my-2">
-            <div className="w-full border-t border-[#2A2E33]" />
-            <span className="bg-[#171A1D] px-3 text-[10px] text-[#8E9297] uppercase font-bold absolute">
-              Ama Email / Password
-            </span>
-          </div>
-
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setAuthError("");
-              if (!authEmail || !authPassword) return;
-
-              if (hasSupabaseConfig) {
-                const res =
-                  authMode === "signin"
-                    ? await signInWithEmail(authEmail, authPassword)
-                    : await signUpWithEmail(authEmail, authPassword);
-                if (res?.error) setAuthError(res.error.message);
-              } else {
-                // Local Session Fallback
-                const localData = { email: authEmail, loggedInAt: new Date().toISOString() };
-                setLocalSession(localData);
-                try {
-                  localStorage.setItem("dheeman-local-auth", JSON.stringify(localData));
-                } catch (err) {
-                  console.error(err);
-                }
-              }
-            }}
-            className="space-y-4"
-          >
+          <form onSubmit={authMode === "signin" ? handleSignIn : handleSignUp} className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-[#8E9297] mb-1">Gmail / Email Address</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Email Address</label>
               <input
                 type="email"
-                placeholder="magacaa@gmail.com"
+                placeholder="manager@dheeman.com"
                 value={authEmail}
                 onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-[#8E9297] mb-1">Password</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Password</label>
               <input
                 type="password"
                 placeholder="••••••••"
                 value={authPassword}
                 onChange={(e) => setAuthPassword(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
                 required
               />
             </div>
 
             <button
               type="submit"
-              className="w-full py-3 rounded-lg bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] font-extrabold text-xs transition shadow-md"
+              className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs transition shadow-md shadow-blue-500/20"
             >
-              {authMode === "signin" ? "Soo Gal (Sign In)" : "Sameyso Account (Sign Up)"}
+              {authMode === "signin" ? "Soo Gal (Sign In)" : "Sameyso Akown (Sign Up)"}
             </button>
           </form>
 
-          <div className="text-center text-xs text-[#8E9297]">
+          <div className="relative flex items-center justify-center my-4">
+            <div className="border-t border-slate-200 w-full" />
+            <span className="bg-white px-3 text-[11px] font-semibold text-slate-400 uppercase">ama</span>
+          </div>
+
+          <button
+            onClick={handleGoogleSignIn}
+            type="button"
+            className="w-full py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm"
+          >
+            <GoogleIcon className="w-4 h-4" />
+            <span>Ku Soo Gal Google (Google Sign-In)</span>
+          </button>
+
+          <div className="text-center text-xs text-slate-500 pt-2">
             {authMode === "signin" ? (
               <p>
-                Account ma lehid?{" "}
+                Weli akown ma lehid?{" "}
                 <button
-                  type="button"
-                  onClick={() => {
-                    setAuthMode("signup");
-                    setAuthError("");
-                  }}
-                  className="text-[#C9A45C] font-bold hover:underline"
+                  onClick={() => setAuthMode("signup")}
+                  className="text-blue-600 font-bold hover:underline"
                 >
-                  Sameyso mid cusub
+                  Rajiistar halkan
                 </button>
               </p>
             ) : (
               <p>
-                Account ma leedahay?{" "}
+                Ma leedahay akown?{" "}
                 <button
-                  type="button"
-                  onClick={() => {
-                    setAuthMode("signin");
-                    setAuthError("");
-                  }}
-                  className="text-[#C9A45C] font-bold hover:underline"
+                  onClick={() => setAuthMode("signin")}
+                  className="text-blue-600 font-bold hover:underline"
                 >
                   Soo gal
                 </button>
@@ -980,1018 +1171,871 @@ export default function Home() {
     );
   }
 
+  // Main Application Shell
   return (
-    <div className="min-h-screen bg-[#111315] text-[#F4EFE6] flex flex-col font-sans selection:bg-[#C9A45C] selection:text-[#111315]">
+    <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col md:flex-row font-sans antialiased">
+      {/* SIDEBAR NAVIGATION - DESKTOP */}
+      <aside className="hidden md:flex flex-col w-64 bg-white border-r border-slate-200 shrink-0 sticky top-0 h-screen z-20">
+        {/* LOGO AREA */}
+        <div className="p-6 border-b border-slate-100 flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+            <CrownIcon className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-lg font-extrabold text-slate-900 tracking-tight leading-none uppercase">Dheeman</h2>
+            <span className="text-[10px] text-blue-600 font-bold tracking-wider uppercase block mt-1">
+              Management System
+            </span>
+          </div>
+        </div>
+
+        {/* NAVIGATION LINKS */}
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {navItems.map((item) => {
+            const isActive = activeTab === item.key;
+            return (
+              <button
+                key={item.key}
+                onClick={() => {
+                  setActiveTab(item.key);
+                  if (item.key !== "debts") setSelectedMarketName(null);
+                }}
+                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-semibold transition text-left ${isActive
+                    ? "bg-blue-50 text-blue-700 font-extrabold border-r-4 border-blue-600 shadow-sm"
+                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+              >
+                <span className={`p-1.5 rounded-lg ${isActive ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-500"}`}>
+                  <NavIcon name={item.icon} className="w-4 h-4" />
+                </span>
+                <div>
+                  <div className="leading-tight">{item.label}</div>
+                  <div className="text-[10px] font-normal text-slate-400 mt-0.5">{item.sub}</div>
+                </div>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* USER PROFILE & LOGOUT */}
+        <div className="p-4 border-t border-slate-100 bg-slate-50/50 space-y-3">
+          <div className="flex items-center gap-3 px-2">
+            <div className="h-9 w-9 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs">
+              {(userSession?.user?.email || localSession?.user?.email || "M")[0].toUpperCase()}
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <p className="text-xs font-extrabold text-slate-900 truncate">
+                {userSession?.user?.email || localSession?.user?.email || "Manager Admin"}
+              </p>
+              <p className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Maamule Firfircoon
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={handleSignOut}
+            className="w-full py-2 rounded-xl bg-white border border-slate-200 hover:bg-red-50 hover:border-red-200 text-slate-700 hover:text-red-600 text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm"
+          >
+            <span>Ka bax</span>
+          </button>
+        </div>
+      </aside>
+
       {/* MOBILE HEADER BAR */}
-      <div className="lg:hidden flex items-center justify-between px-4 py-3 bg-[#171A1D] border-b border-[#2A2E33] sticky top-0 z-30">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-md bg-[#22262A] border border-[#C9A45C]/40 flex items-center justify-center text-[#C9A45C]">
+      <header className="md:hidden bg-white border-b border-slate-200 p-4 flex items-center justify-between sticky top-0 z-30 shadow-sm">
+        <div className="flex items-center gap-2.5">
+          <div className="h-8 w-8 rounded-lg bg-blue-600 flex items-center justify-center text-white">
             <CrownIcon className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-sm font-extrabold tracking-wider text-[#F4EFE6] uppercase">Dheeman</h1>
-            <p className="text-[10px] text-[#C9A45C] font-semibold tracking-widest uppercase">POS Software</p>
+            <h1 className="text-base font-extrabold text-slate-900 uppercase leading-none">Dheeman</h1>
+            <span className="text-[9px] text-blue-600 font-bold tracking-wider">MANAGEMENT</span>
           </div>
         </div>
+
         <button
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="p-2 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] hover:text-[#C9A45C]"
-          aria-label="Toggle Navigation"
+          className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
         >
-          <MenuIcon className="w-5 h-5" />
+          {mobileMenuOpen ? <XIcon className="w-5 h-5" /> : <MenuIcon className="w-5 h-5" />}
         </button>
-      </div>
+      </header>
 
-      <div className="flex flex-1 relative">
-        {/* NAVIGATION SIDEBAR (Desktop Fixed, Mobile Slide-over) */}
-        <aside
-          className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#171A1D] border-r border-[#2A2E33] flex flex-col justify-between transition-transform duration-300 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
-            }`}
-        >
-          <div>
-            {/* BRAND HEADER */}
-            <div className="p-6 border-b border-[#2A2E33] flex items-center justify-between">
-              <div className="flex items-center gap-3.5">
-                <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-[#22262A] to-[#111315] border border-[#C9A45C]/50 flex items-center justify-center text-[#C9A45C] shadow-lg shadow-[#C9A45C]/10">
-                  <CrownIcon className="w-6 h-6" />
-                </div>
-                <div>
-                  <h1 className="text-base font-extrabold tracking-wide text-[#F4EFE6] uppercase">Dheeman</h1>
-                  <p className="text-[10px] text-[#8E9297] font-medium tracking-widest uppercase mt-0.5">
-                    Restaurant Software
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* QUICK STAT HIGHLIGHT IN SIDEBAR */}
-            <div className="mx-4 mt-5 p-4 rounded-lg bg-[#22262A] border border-[#2A2E33]">
-              <div className="flex items-center justify-between text-xs text-[#8E9297] font-medium">
-                <span>Faa'iidada Maanta</span>
-                <span className="h-2 w-2 rounded-full bg-[#22C55E] animate-pulse" />
-              </div>
-              <p className={`mt-1.5 text-xl font-bold tracking-tight ${summary.profit >= 0 ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
-                {money(summary.profit)}
-              </p>
-              <div className="mt-2 text-[11px] text-[#8E9297]">
-                Revenue: <span className="text-[#C9A45C] font-semibold">{money(summary.revenue)}</span>
-              </div>
-            </div>
-
-            {/* NAV LINKS */}
-            <nav className="mt-6 px-3 space-y-1.5">
-              {navItems.map((item) => {
-                const isActive = activeTab === item.key;
-                return (
-                  <button
-                    key={item.key}
-                    onClick={() => {
-                      setActiveTab(item.key);
-                      setMobileMenuOpen(false);
-                    }}
-                    className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-lg text-sm font-semibold transition-all duration-150 relative group ${isActive
-                        ? "bg-[#22262A] text-[#F4EFE6] shadow-sm border border-[#2A2E33]"
-                        : "text-[#8E9297] hover:bg-[#22262A]/60 hover:text-[#F4EFE6]"
-                      }`}
-                  >
-                    {isActive && (
-                      <span className="absolute left-0 top-2 bottom-2 w-1 bg-[#C9A45C] rounded-r-full" />
-                    )}
-                    <NavIcon name={item.icon} className={`w-5 h-5 ${isActive ? "text-[#C9A45C]" : "text-[#8E9297] group-hover:text-[#F4EFE6]"}`} />
-                    <div className="text-left">
-                      <div className="leading-none">{item.label}</div>
-                      <div className="text-[10px] text-[#8E9297] font-normal mt-1">{item.sub}</div>
-                    </div>
-                  </button>
-                );
-              })}
-            </nav>
+      {/* MOBILE NAV MENU DRAWER */}
+      {mobileMenuOpen && (
+        <div className="md:hidden fixed inset-0 z-40 flex flex-col bg-white p-4 space-y-3 pt-20 animate-in fade-in duration-150">
+          <div className="space-y-1">
+            {navItems.map((item) => (
+              <button
+                key={item.key}
+                onClick={() => {
+                  setActiveTab(item.key);
+                  if (item.key !== "debts") setSelectedMarketName(null);
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold ${activeTab === item.key
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-500/20"
+                    : "text-slate-700 bg-slate-50"
+                  }`}
+              >
+                <NavIcon name={item.icon} className="w-4 h-4" />
+                <span>{item.label}</span>
+              </button>
+            ))}
           </div>
 
-          {/* SIDEBAR FOOTER */}
-          <div className="p-4 border-t border-[#2A2E33] space-y-3">
-            <div className="flex items-center gap-3 px-2 py-2 rounded-lg bg-[#22262A]/50 border border-[#2A2E33]/60">
-              {userSession?.user?.user_metadata?.avatar_url ? (
-                <img
-                  src={userSession.user.user_metadata.avatar_url}
-                  alt="Avatar"
-                  className="h-8 w-8 rounded-full border border-[#C9A45C]/40"
-                />
-              ) : (
-                <div className="h-8 w-8 rounded-full bg-[#C9A45C]/20 border border-[#C9A45C]/40 flex items-center justify-center text-[#C9A45C] text-xs font-bold">
-                  {userSession?.user?.email?.slice(0, 2).toUpperCase() || "DR"}
-                </div>
-              )}
-              <div className="overflow-hidden">
-                <p className="text-xs font-bold text-[#F4EFE6] truncate">
-                  {userSession?.user?.user_metadata?.full_name || userSession?.user?.email || localSession?.email || "Manager Profile"}
-                </p>
-                <p className="text-[10px] text-[#8E9297] truncate">
-                  {userSession?.user?.email || localSession?.email || "Dheeman Main Branch"}
-                </p>
-              </div>
-            </div>
-
-            {isLoggedIn && (
-              <button
-                onClick={handleSignOut}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#2A2E33] text-[#F4EFE6] text-xs font-bold transition hover:text-[#EF4444]"
-              >
-                <span>Ka Bax (Sign Out)</span>
-              </button>
-            )}
-
+          <div className="pt-4 border-t border-slate-100">
             <button
-              onClick={clearAllData}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-[#EF4444]/10 border border-[#EF4444]/20 text-[#EF4444] text-xs font-semibold hover:bg-[#EF4444]/20 transition"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                handleSignOut();
+              }}
+              className="w-full py-2.5 rounded-xl bg-red-50 text-red-600 font-bold text-xs border border-red-200"
             >
-              <TrashIcon className="w-3.5 h-3.5" />
-              <span>Nadiifi Xogta</span>
+              Ka bax
             </button>
           </div>
-        </aside>
+        </div>
+      )}
 
-        {/* MOBILE OVERLAY */}
-        {mobileMenuOpen && (
-          <div
-            onClick={() => setMobileMenuOpen(false)}
-            className="fixed inset-0 z-30 bg-black/70 backdrop-blur-sm lg:hidden"
-          />
-        )}
+      {/* MAIN CONTENT AREA */}
+      <main className="flex-1 overflow-y-auto min-h-screen">
+        {/* TOP BAR */}
+        <header className="hidden md:flex bg-white border-b border-slate-200 px-8 py-4 items-center justify-between sticky top-0 z-10 shadow-sm">
+          <div>
+            <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">{activeNav?.label}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">{activeNav?.sub}</p>
+          </div>
 
-        {/* MAIN APPLICATION CONTAINER */}
-        <main className="flex-1 lg:pl-64 flex flex-col min-w-0">
-          {/* HEADER BAR */}
-          <header className="sticky top-0 z-20 bg-[#171A1D]/90 backdrop-blur-md border-b border-[#2A2E33] px-6 py-4 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 text-xs text-[#8E9297]">
-                <span>Dheeman System</span>
-                <span>/</span>
-                <span className="text-[#C9A45C] font-semibold">{activeNav?.label}</span>
-              </div>
-              <h2 className="text-xl font-bold text-[#F4EFE6] tracking-tight mt-0.5">{activeNav?.sub}</h2>
-            </div>
+          {/* STANDARDIZED BUTTON BAR */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => openModal("sale")}
+              className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+            >
+              <PlusIcon className="w-4 h-4 text-emerald-600" />
+              <span>+ Ku Soo Dar Dakhli</span>
+            </button>
 
-            {/* HEADER ACTIONS */}
-            <div className="flex items-center flex-wrap gap-3">
-              {/* SEARCH INPUT */}
-              <div className="relative hidden md:block">
-                <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9297]" />
-                <input
-                  type="text"
-                  placeholder="Raadi xog..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 pr-4 py-2 text-xs rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] placeholder-[#8E9297] focus:border-[#C9A45C] focus:ring-1 focus:ring-[#C9A45C] outline-none transition w-48 lg:w-64"
-                />
-              </div>
+            <button
+              onClick={() => openModal("expense")}
+              className="px-3.5 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+            >
+              <PlusIcon className="w-4 h-4 text-red-600" />
+              <span>+ Ku Soo Dar Kharash</span>
+            </button>
 
-              {/* DATE SELECTOR */}
-              <div className="flex items-center gap-2 bg-[#22262A] border border-[#2A2E33] px-3 py-1.5 rounded-md">
-                <CalendarIcon className="w-4 h-4 text-[#C9A45C]" />
-                <input
-                  type="date"
-                  value={reportDate}
-                  onChange={(e) => setReportDate(e.target.value)}
-                  className="bg-transparent text-xs font-semibold text-[#F4EFE6] outline-none border-none cursor-pointer"
-                />
-              </div>
+            <button
+              onClick={() => openModal("debt")}
+              className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-blue-500/10"
+            >
+              <PlusIcon className="w-4 h-4 text-white" />
+              <span>+ Ku Soo Dar Dayn</span>
+            </button>
+          </div>
+        </header>
 
-              {/* QUICK ACTION BUTTON */}
-              <button
-                onClick={() => openModal("expense")}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-bold transition shadow-sm"
-              >
-                <PlusIcon className="w-4 h-4" />
-                <span>+ Kharash Cusub</span>
-              </button>
-
-              <button
-                onClick={() => openModal("stock")}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#A98245]/40 text-[#F4EFE6] text-xs font-bold transition"
-              >
-                <PlusIcon className="w-4 h-4 text-[#C9A45C]" />
-                <span>+ Kayd Cusub</span>
-              </button>
-            </div>
-          </header>
-
-          {/* PAGE CONTENT CONTAINER */}
-          <div className="p-6 space-y-6 max-w-7xl mx-auto w-full">
-            {/* ==================================================== */}
-            {/* TAB 1: DASHBOARD OVERVIEW */}
-            {/* ==================================================== */}
-            {activeTab === "dashboard" && (
-              <div className="space-y-6">
-                {/* HERO EXECUTIVE INTRO BANNER */}
-                <div className="p-6 rounded-xl bg-gradient-to-r from-[#171A1D] via-[#22262A] to-[#171A1D] border border-[#2A2E33] flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
-                  <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-gradient-to-l from-[#C9A45C]/5 to-transparent pointer-events-none" />
-                  <div className="space-y-2 relative z-10 max-w-2xl">
-                    <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-xs font-bold uppercase tracking-wider">
-                      <SparklesIcon className="w-3.5 h-3.5" />
-                      <span>Maamulka Maanta</span>
-                    </div>
-                    <h3 className="text-2xl sm:text-3xl font-extrabold text-[#F4EFE6] tracking-tight">
-                      Si fudud ula soco dakhliga, kharashka, kaydka iyo faa'iidada.
-                    </h3>
-                    <p className="text-xs sm:text-sm text-[#8E9297] leading-relaxed">
-                      Warbixinta tooska ah ee restaurant-ka Dheeman. Taariikhda la doortay: <strong className="text-[#F4EFE6]">{reportDate}</strong>
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 relative z-10 w-full md:w-auto">
-                    <button
-                      onClick={() => openModal("sale")}
-                      className="flex-1 md:flex-none px-4 py-2.5 rounded-md bg-[#22C55E] hover:bg-[#16A34A] text-[#111315] text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2"
-                    >
-                      <PlusIcon className="w-4 h-4" />
-                      <span>+ Dakhli Cusub</span>
-                    </button>
-                    <button
-                      onClick={() => openModal("useStock")}
-                      className="flex-1 md:flex-none px-4 py-2.5 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#2A2E33] text-[#F4EFE6] text-xs font-bold transition flex items-center justify-center gap-2"
-                    >
-                      <BoxIcon className="w-4 h-4 text-[#C9A45C]" />
-                      <span>Isticmaal Kayd</span>
-                    </button>
-                  </div>
+        {/* CONTAINER VIEW */}
+        <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
+          {/* ==================================================== */}
+          {/* TAB 1: DASHBOARD PAGE */}
+          {/* ==================================================== */}
+          {activeTab === "dashboard" && (
+            <div className="space-y-6">
+              {/* WELCOME HERO */}
+              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div>
+                  <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-bold uppercase tracking-wider inline-flex items-center gap-1.5">
+                    <SparklesIcon className="w-3.5 h-3.5" />
+                    Kheyraadka Meheradda Dheeman
+                  </span>
+                  <h3 className="text-2xl font-extrabold text-slate-900 tracking-tight mt-2">
+                    Xogta Guud ee Maanta ({today})
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1 max-w-xl">
+                    Maamusho dakhliga iibka, kharashaadka maalinlaha ah, baaqiga daymaha suuqyada, iyo alaabta kaydka ah.
+                  </p>
                 </div>
 
-                {/* 4 CORE FINANCIAL SUMMARY METRICS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {/* METRIC 1: DAKHLIGA */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33] hover:border-[#C9A45C]/40 transition group">
-                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
-                      <span>Dakhliga Maanta</span>
-                      <span className="p-1.5 rounded-md bg-[#C9A45C]/10 text-[#C9A45C]">
-                        <TrendingUpIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className="mt-3 text-2xl font-extrabold text-[#F4EFE6] tracking-tight">
-                      {money(summary.revenue)}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px]">
-                      <span className="text-[#22C55E] font-semibold flex items-center gap-1">
-                        ✓ {summary.dailySales.length} iib maanta
-                      </span>
-                      <span className="text-[#8E9297]">Live income</span>
-                    </div>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveTab("reports")}
+                    className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition flex items-center gap-2"
+                  >
+                    <DocumentIcon className="w-4 h-4 text-slate-600" />
+                    <span>Eeg Warbixinta Faa'iidada & Khasaaraha</span>
+                  </button>
+                </div>
+              </div>
 
-                  {/* METRIC 2: KHARASHKA CASH */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33] hover:border-[#C9A45C]/40 transition group">
-                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
-                      <span>Kharashka Cash</span>
-                      <span className="p-1.5 rounded-md bg-[#A98245]/10 text-[#A98245]">
-                        <CreditCardIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className="mt-3 text-2xl font-extrabold text-[#F4EFE6] tracking-tight">
-                      {money(summary.cashSpent)}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px]">
-                      <span className="text-[#8E9297] font-medium">
-                        {summary.dailyExpenses.filter((e) => e.type === "cash").length} bixintee cash
-                      </span>
-                      <span className="text-[#A98245]">Outflow</span>
-                    </div>
+              {/* FINANCIAL STATS CARDS */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* REVENUE */}
+                <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+                    <span>Dakhliga Iibka</span>
+                    <span className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
+                      <DollarIcon className="w-4 h-4" />
+                    </span>
                   </div>
-
-                  {/* METRIC 3: DAYNTA MAANTA */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33] hover:border-[#EF4444]/40 transition group">
-                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
-                      <span>Daynta Maanta</span>
-                      <span className="p-1.5 rounded-md bg-[#EF4444]/10 text-[#EF4444]">
-                        <AlertIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className="mt-3 text-2xl font-extrabold text-[#EF4444] tracking-tight">
-                      {money(summary.debt)}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px]">
-                      <span className="text-[#EF4444]/80 font-medium">Payable debts</span>
-                      <span className="text-[#8E9297]">Kharash dayn</span>
-                    </div>
+                  <div className="text-2xl font-extrabold text-emerald-600">
+                    {money(summary.totalSales)}
                   </div>
-
-                  {/* METRIC 4: FAA'IIDADA MAANTA */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33] hover:border-[#22C55E]/40 transition group">
-                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
-                      <span>{summary.profit >= 0 ? "Faa'iidada Maanta" : "Khasaaraha Maanta"}</span>
-                      <span className={`p-1.5 rounded-md ${summary.profit >= 0 ? "bg-[#22C55E]/10 text-[#22C55E]" : "bg-[#EF4444]/10 text-[#EF4444]"}`}>
-                        <DollarIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className={`mt-3 text-2xl font-extrabold tracking-tight ${summary.profit >= 0 ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
-                      {money(summary.profit)}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px]">
-                      <span className="text-[#8E9297]">Net Profit Result</span>
-                      <span className={`font-semibold ${summary.profit >= 0 ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
-                        {summary.profit >= 0 ? "Positive" : "Negative"}
-                      </span>
-                    </div>
-                  </div>
+                  <div className="text-[11px] text-slate-400 font-medium">Wadarta dakhliga ka soo maray iibka</div>
                 </div>
 
-                {/* MAIN ANALYTICS CHART & RECENT TRANSACTIONS */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* FINANCIAL ANALYTICS CHART (2 COLS) */}
-                  <div className="lg:col-span-2 p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] flex flex-col justify-between space-y-4">
-                    <div className="flex flex-wrap items-center justify-between gap-4">
-                      <div>
-                        <h4 className="text-base font-extrabold text-[#F4EFE6] tracking-tight">
-                          Guudmarka Maaliyadda
-                        </h4>
-                        <p className="text-xs text-[#8E9297] mt-0.5">
-                          Dakhliga, kharashka iyo faa'iidada muddada la doortay.
-                        </p>
+                {/* CASH EXPENSES */}
+                <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+                    <span>Kharashka Baxay</span>
+                    <span className="p-2 rounded-xl bg-red-50 text-red-600">
+                      <CreditCardIcon className="w-4 h-4" />
+                    </span>
+                  </div>
+                  <div className="text-2xl font-extrabold text-red-600">
+                    {money(summary.cashExpenses)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-medium">Wadarta kharashaadka guud ee la bixiyay</div>
+                </div>
+
+                {/* NET PROFIT */}
+                <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+                    <span>Faa'iidada Net-ka ah</span>
+                    <span className="p-2 rounded-xl bg-blue-50 text-blue-600">
+                      <TrendingUpIcon className="w-4 h-4" />
+                    </span>
+                  </div>
+                  <div
+                    className={`text-2xl font-extrabold ${summary.netProfit >= 0 ? "text-emerald-600" : "text-red-600"
+                      }`}
+                  >
+                    {money(summary.netProfit)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-medium">Dakhliga ka soo haray kharashka</div>
+                </div>
+
+                {/* OUTSTANDING DEBTS */}
+                <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+                    <span>Baaqiga Daynta</span>
+                    <span className="p-2 rounded-xl bg-amber-50 text-amber-600">
+                      <AlertIcon className="w-4 h-4" />
+                    </span>
+                  </div>
+                  <div className="text-2xl font-extrabold text-rose-600">
+                    {money(debtSummary.totalPendingDebt)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-medium">Wadarta daymaha lagu leeyahay suuqyada</div>
+                </div>
+              </div>
+
+              {/* SECONDARY ROW: RECENT TRANSACTIONS STREAM */}
+              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                  <div>
+                    <h4 className="text-base font-extrabold text-slate-900">Hawgalladii Ugu Dambeeyay</h4>
+                    <p className="text-xs text-slate-500 mt-0.5">Diiwaanka dakhliga iyo kharashka meheradda.</p>
+                  </div>
+                  <button
+                    onClick={() => openModal("sale")}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 text-xs font-bold transition shadow-sm"
+                  >
+                    + Ku Soo Dar Dakhli
+                  </button>
+                </div>
+
+                <ActivityTable activities={recentActivities} />
+              </div>
+            </div>
+          )}
+
+          {/* ==================================================== */}
+          {/* TAB 2: KHARASH (EXPENSES) PAGE */}
+          {/* ==================================================== */}
+          {activeTab === "expenses" && (
+            <div className="space-y-6">
+              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-extrabold text-slate-900">Diiwaanka Kharashaadka</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Maamul oo diiwaangeli dhammaan kharashaadka maalinlaha ah.</p>
+                </div>
+
+                <button
+                  onClick={() => openModal("expense")}
+                  className="px-4 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 text-xs font-bold transition shadow-sm flex items-center gap-2"
+                >
+                  <PlusIcon className="w-4 h-4 text-red-600" />
+                  <span>+ Ku Soo Dar Kharash</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm">
+                  <p className="text-xs font-bold text-slate-500 uppercase">Wadarta Kharashka</p>
+                  <p className="text-2xl font-extrabold text-slate-900 mt-2">{money(summary.totalExpenses)}</p>
+                </div>
+                <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm">
+                  <p className="text-xs font-bold text-slate-500 uppercase">Kharashka Cash-ka ah</p>
+                  <p className="text-2xl font-extrabold text-red-600 mt-2">{money(summary.cashExpenses)}</p>
+                </div>
+                <div className="p-5 rounded-xl bg-white border border-slate-200 shadow-sm">
+                  <p className="text-xs font-bold text-slate-500 uppercase">Kharashka Daynta ah</p>
+                  <p className="text-2xl font-extrabold text-amber-600 mt-2">{money(summary.debtExpenses)}</p>
+                </div>
+              </div>
+
+              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+                <ExpenseTable expenses={expenses} onDelete={deleteExpense} />
+              </div>
+            </div>
+          )}
+
+          {/* ==================================================== */}
+          {/* TAB 3: KAYD (INVENTORY) PAGE */}
+          {/* ==================================================== */}
+          {activeTab === "inventory" && (
+            <div className="space-y-6">
+              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-extrabold text-slate-900">Maamulka Alaabta Kaydka</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Diiwaanka raashinka, badeecadaha, iyo isticmaalka maalinlaha ah.</p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={() => openModal("useStock")}
+                    className="px-3.5 py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                  >
+                    <span>- Ka Jar Kaydka</span>
+                  </button>
+                  <button
+                    onClick={() => openModal("stock")}
+                    className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-md shadow-blue-500/10 flex items-center gap-1.5"
+                  >
+                    <PlusIcon className="w-4 h-4" />
+                    <span>+ Soo Dhig Kayd Cusub</span>
+                  </button>
+                </div>
+              </div>
+
+              <InventoryTable inventory={inventory} onDelete={deleteStock} onUseStock={openModal} />
+            </div>
+          )}
+
+          {/* ==================================================== */}
+          {/* TAB 4: DAYN & SUUQYO (DEBTS & MARKETS) PAGE */}
+          {/* ==================================================== */}
+          {activeTab === "debts" && (
+            <div className="space-y-6">
+              {/* DEDICATED MARKET VIEW IF A MARKET IS SELECTED */}
+              {selectedMarketName ? (
+                (() => {
+                  const currentMarketDetails = debtSummary.marketsList.find(
+                    (m) => m.name.toLowerCase() === selectedMarketName.toLowerCase()
+                  ) || {
+                    id: crypto.randomUUID(),
+                    name: selectedMarketName,
+                    phone: "",
+                    purchaseAmount: 0,
+                    notes: "",
+                    pending: 0,
+                    total: 0,
+                    paid: 0,
+                    count: 0,
+                  };
+                  const currentMarketDebts = debts.filter(
+                    (d) => (d.marketName || "").trim().toLowerCase() === selectedMarketName.toLowerCase()
+                  );
+
+                  return (
+                    <div className="space-y-6">
+                      {/* TOP NAVIGATION BAR FOR DEDICATED MARKET PAGE */}
+                      <div className="p-4 rounded-2xl bg-white border border-slate-200 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+                        <button
+                          onClick={() => setSelectedMarketName(null)}
+                          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition flex items-center gap-2"
+                        >
+                          <span>← Ku Noqo Dhammaan Suuqyada</span>
+                        </button>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            onClick={() => exportDebtsToCSV(currentMarketDebts, `${selectedMarketName}_${today}`)}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold transition flex items-center gap-2 shadow-sm"
+                          >
+                            <DocumentIcon className="w-4 h-4 text-emerald-600" />
+                            <span>📊 Export Excel CSV</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setDebtForm({ ...debtForm, marketName: selectedMarketName });
+                              openModal("debt");
+                            }}
+                            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-md flex items-center gap-2"
+                          >
+                            <PlusIcon className="w-4 h-4" />
+                            <span>+ Ku Dar Iib Suuqa {selectedMarketName}</span>
+                          </button>
+                        </div>
                       </div>
 
-                      {/* FILTER TIMEFRAME BUTTONS */}
-                      <div className="flex items-center gap-1 bg-[#22262A] p-1 rounded-lg border border-[#2A2E33]">
-                        {["7d", "30d", "3m", "12m"].map((period) => (
-                          <button
-                            key={period}
-                            onClick={() => setChartPeriod(period)}
-                            className={`px-3 py-1 text-xs font-semibold rounded-md transition ${chartPeriod === period
-                                ? "bg-[#C9A45C] text-[#111315] font-bold shadow-sm"
-                                : "text-[#8E9297] hover:text-[#F4EFE6]"
-                              }`}
+                      {/* HERO MARKET CARD */}
+                      <div className="p-8 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-6">
+                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 pb-6">
+                          <div className="space-y-1">
+                            <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold uppercase tracking-wider inline-flex items-center gap-1.5">
+                              <StoreIcon className="w-3.5 h-3.5" />
+                              Dedicated Market Profile Card
+                            </span>
+                            <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">{selectedMarketName}</h2>
+                            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-1">
+                              {currentMarketDetails.phone && (
+                                <span className="flex items-center gap-1 text-blue-600 font-semibold">
+                                  📞 Tel: <a href={`tel:${currentMarketDetails.phone}`} className="hover:underline">{currentMarketDetails.phone}</a>
+                                </span>
+                              )}
+                              <span className="flex items-center gap-1 text-slate-600">
+                                💵 Qiimaha Alaabta Laga Iibsaday (Purchase Amount): <strong className="text-slate-900 font-extrabold">{money(currentMarketDetails.purchaseAmount || currentMarketDetails.total)}</strong>
+                              </span>
+                              <span className="flex items-center gap-1 text-slate-600">
+                                📦 Wadarta Diiwaangelinta: <strong className="text-slate-900">{currentMarketDetails.count} xogta</strong>
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleEditMarketClick(currentMarketDetails)}
+                              className="px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold transition flex items-center gap-1.5"
+                            >
+                              <span>Wax ka Beddel Suuqa</span>
+                            </button>
+                            <button
+                              onClick={() => deleteMarket(selectedMarketName)}
+                              className="px-3.5 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold transition flex items-center gap-1.5"
+                            >
+                              <TrashIcon className="w-4 h-4" />
+                              <span>Tirtir Suuqa</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* STATS COUNTERS INSIDE CARD */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                          <div className="p-5 rounded-xl bg-slate-50 border border-slate-200">
+                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Qiimaha Guud ee Iibka</p>
+                            <p className="text-2xl font-extrabold text-slate-900 mt-2">{money(currentMarketDetails.total)}</p>
+                          </div>
+
+                          <div className="p-5 rounded-xl bg-emerald-50/50 border border-emerald-200">
+                            <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider">Lacagta La Bixiyay</p>
+                            <p className="text-2xl font-extrabold text-emerald-600 mt-2">{money(currentMarketDetails.paid)}</p>
+                          </div>
+
+                          <div className="p-5 rounded-xl bg-red-50/50 border border-red-200">
+                            <p className="text-xs font-bold text-red-700 uppercase tracking-wider">Baaqiga Daynta Dhiman</p>
+                            <p className="text-3xl font-extrabold text-red-600 mt-2">{money(currentMarketDetails.pending)}</p>
+                          </div>
+
+                          <div className="p-5 rounded-xl bg-slate-50 border border-slate-200">
+                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tirada Orodka / Iibka</p>
+                            <p className="text-2xl font-extrabold text-slate-900 mt-2">{currentMarketDetails.count}</p>
+                          </div>
+                        </div>
+
+                        {currentMarketDetails.notes && (
+                          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600">
+                            <span className="font-bold text-blue-600">💡 Note/Xusuusin:</span> {currentMarketDetails.notes}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* EXCEL SPREADSHEET GRID FOR THIS MARKET */}
+                      <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                          <div>
+                            <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                              <span>📊 Xogta Suuqa Qaabka Excel-ka (Excel Data Grid Spreadsheet)</span>
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-0.5">Xogta rasmiga ah ee suuqa {selectedMarketName}.</p>
+                          </div>
+                        </div>
+
+                        <ExcelMarketGrid
+                          debts={currentMarketDebts}
+                          onPay={(debt) => setPayDebtModal({ open: true, debtId: debt.id, amount: "", marketName: debt.marketName })}
+                          onDelete={deleteDebt}
+                          onEdit={openEditDebtModal}
+                        />
+                      </div>
+                    </div>
+                  );
+                })()
+              ) : (
+                /* OVERVIEW VIEW FOR ALL MARKETS */
+                <div className="space-y-6">
+                  {/* HEADER BANNER */}
+                  <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                    <div className="space-y-2 max-w-2xl">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-bold uppercase tracking-wider">
+                        <StoreIcon className="w-3.5 h-3.5" />
+                        <span>Suuqyada & Daymaha (Markets & Debts)</span>
+                      </div>
+                      <h3 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                        Maamulka Daymaha & Bakhaarrada Alaabta
+                      </h3>
+                      <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">
+                        Diiwaanka lacagaha raashinka iyo alaabta lagu soo qaatay daynta, suuqyada gaarka ah, iyo Excel data analysis.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                      <button
+                        onClick={() => {
+                          setMarketForm({ id: null, name: "", productName: "", phone: "", purchaseAmount: "", notes: "" });
+                          setIsMarketModalOpen(true);
+                        }}
+                        className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-md shadow-blue-500/10 flex items-center justify-center gap-2"
+                      >
+                        <PlusIcon className="w-4 h-4" />
+                        <span>+ Ku Soo Dar Suuq Cusub</span>
+                      </button>
+                      <button
+                        onClick={() => exportDebtsToCSV(debts, today)}
+                        className="px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold transition shadow-sm flex items-center justify-center gap-2"
+                      >
+                        <DocumentIcon className="w-4 h-4 text-emerald-600" />
+                        <span>📥 Export CSV</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* METRICS CARDS */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between text-xs text-slate-500 font-bold">
+                        <span>Jumlada Daynta Guud</span>
+                        <span className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
+                          <CreditCardIcon className="w-4 h-4" />
+                        </span>
+                      </div>
+                      <div className="mt-3 text-2xl font-extrabold text-slate-900">
+                        {money(debtSummary.totalOriginalDebt)}
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-400">Wadarta iibka suuqyada guud</div>
+                    </div>
+
+                    <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between text-xs text-rose-600 font-bold">
+                        <span>Baaqiga Daynta</span>
+                        <span className="p-1.5 rounded-lg bg-rose-50 text-rose-600">
+                          <AlertIcon className="w-4 h-4" />
+                        </span>
+                      </div>
+                      <div className="mt-3 text-2xl font-extrabold text-rose-600">
+                        {money(debtSummary.totalPendingDebt)}
+                      </div>
+                      <div className="mt-1 text-[11px] text-rose-500 font-medium">Daynta dhiman oo laga rabo</div>
+                    </div>
+
+                    <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between text-xs text-emerald-600 font-bold">
+                        <span>Lacagta La Bixiyay</span>
+                        <span className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
+                          <DollarIcon className="w-4 h-4" />
+                        </span>
+                      </div>
+                      <div className="mt-3 text-2xl font-extrabold text-emerald-600">
+                        {money(debtSummary.totalPaidDebt)}
+                      </div>
+                      <div className="mt-1 text-[11px] text-emerald-600 font-medium">Wadarta lacagta daynta ka bixideeda</div>
+                    </div>
+
+                    <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between text-xs text-slate-500 font-bold">
+                        <span>Suuqyada & Bakhaarrada</span>
+                        <span className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
+                          <StoreIcon className="w-4 h-4" />
+                        </span>
+                      </div>
+                      <div className="mt-3 text-2xl font-extrabold text-slate-900">
+                        {debtSummary.marketCount} <span className="text-xs font-medium text-slate-500">Suuq/Bakhaar</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-400">Tirada suuqyada diiwaangashan</div>
+                    </div>
+                  </div>
+
+                  {/* MARKETS CARDS LIST GRID */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                        <StoreIcon className="w-4 h-4 text-blue-600" />
+                        <span>Suuqyada Diiwaangashan (Riix si aad u furto Profile-ka Suuqa)</span>
+                      </h4>
+                      <button
+                        onClick={() => {
+                          setMarketForm({ id: null, name: "", productName: "", phone: "", purchaseAmount: "", notes: "" });
+                          setIsMarketModalOpen(true);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-blue-600 text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                      >
+                        <PlusIcon className="w-3.5 h-3.5" />
+                        <span>+ Ku Soo Dar Suuq Cusub</span>
+                      </button>
+                    </div>
+
+                    {debtSummary.marketsList.length === 0 ? (
+                      <div className="p-8 text-center bg-white rounded-2xl border border-dashed border-slate-300 space-y-3">
+                        <StoreIcon className="w-10 h-10 text-slate-400 mx-auto opacity-50" />
+                        <p className="text-xs text-slate-500 font-medium">Weli ma jiro suuq diiwaangashan. Riix '+ Ku Soo Dar Suuq Cusub'.</p>
+                        <button
+                          onClick={() => {
+                            setMarketForm({ id: null, name: "", productName: "", phone: "", purchaseAmount: "", notes: "" });
+                            setIsMarketModalOpen(true);
+                          }}
+                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-md shadow-blue-500/10"
+                        >
+                          + Ku Soo Dar Suuq Cusub
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                        {debtSummary.marketsList.map((m, idx) => (
+                          <div
+                            key={idx}
+                            onClick={() => setSelectedMarketName(m.name)}
+                            className="p-5 rounded-2xl bg-white border border-slate-200 hover:border-blue-500 transition shadow-sm hover:shadow-md cursor-pointer group flex flex-col justify-between space-y-4"
                           >
-                            {period === "7d" ? "7 Maalmood" : period === "30d" ? "30 Maalmood" : period === "3m" ? "3 Bilood" : "12 Bilood"}
-                          </button>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-extrabold text-slate-900 group-hover:text-blue-600 transition flex items-center gap-2">
+                                  <StoreIcon className="w-4 h-4 text-blue-600" />
+                                  {m.name}
+                                </span>
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                                  {m.count} xogta
+                                </span>
+                              </div>
+                              {m.phone && (
+                                <p className="text-xs text-slate-500">
+                                  📞 Tel: <span className="text-blue-600 font-semibold">{m.phone}</span>
+                                </p>
+                              )}
+                              <p className="text-xs text-slate-600">
+                                💵 Qiimaha Alaabta: <span className="text-slate-900 font-extrabold">{money(m.purchaseAmount || m.total)}</span>
+                              </p>
+                            </div>
+
+                            <div className="pt-3 border-t border-slate-100 space-y-3">
+                              <div className="flex items-center justify-between text-xs">
+                                <div>
+                                  <span className="text-slate-400 text-[10px] block font-medium">Baaqiga Daynta:</span>
+                                  <span className={`font-extrabold text-sm ${m.pending > 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                                    {money(m.pending)}
+                                  </span>
+                                </div>
+                                <div className="text-right">
+                                  <span className="text-slate-400 text-[10px] block font-medium">Wadarta Guud:</span>
+                                  <span className="font-bold text-slate-900">{money(m.total)}</span>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedMarketName(m.name);
+                                }}
+                                className="w-full py-2 rounded-xl bg-slate-50 group-hover:bg-blue-600 text-slate-700 group-hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 border border-slate-200 group-hover:border-blue-600"
+                              >
+                                <span>Fura Page-ka Suuqa</span>
+                                <span>→</span>
+                              </button>
+                            </div>
+                          </div>
                         ))}
                       </div>
-                    </div>
-
-                    {/* CHART VISUALIZER */}
-                    <div className="pt-4 pb-2 border-t border-b border-[#2A2E33]/60 relative">
-                      <div className="h-56 w-full flex items-end justify-between gap-2 px-2 pt-6">
-                        {(() => {
-                          const maxVal = Math.max(...chartData.map((d) => Math.max(d.rev, d.exp)), 1);
-
-                          return chartData.map((data, index) => {
-                            const revPct = data.rev > 0 ? Math.min((data.rev / maxVal) * 100, 100) : 0;
-                            const expPct = data.exp > 0 ? Math.min((data.exp / maxVal) * 100, 100) : 0;
-
-                            return (
-                              <div key={index} className="flex-1 flex flex-col items-center gap-2 group relative">
-                                <div className="w-full flex items-end justify-center gap-1.5 h-44">
-                                  {/* REVENUE BAR */}
-                                  <div
-                                    style={{ height: `${revPct}%` }}
-                                    className={`w-3.5 rounded-t-sm bg-[#C9A45C] group-hover:bg-[#D8B46B] transition-all duration-300 relative ${revPct === 0 ? "min-h-[2px] opacity-20" : ""
-                                      }`}
-                                  >
-                                    <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-[#22262A] text-[#F4EFE6] text-[10px] px-1.5 py-0.5 rounded border border-[#2A2E33] pointer-events-none whitespace-nowrap z-20 shadow-md">
-                                      Dakhli: {money(data.rev)}
-                                    </div>
-                                  </div>
-
-                                  {/* EXPENSE BAR */}
-                                  <div
-                                    style={{ height: `${expPct}%` }}
-                                    className={`w-3.5 rounded-t-sm bg-[#EF4444]/80 group-hover:bg-[#EF4444] transition-all duration-300 relative ${expPct === 0 ? "min-h-[2px] opacity-20" : ""
-                                      }`}
-                                  >
-                                    <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-[#22262A] text-[#F4EFE6] text-[10px] px-1.5 py-0.5 rounded border border-[#2A2E33] pointer-events-none whitespace-nowrap z-20 shadow-md">
-                                      Kharash: {money(data.exp)}
-                                    </div>
-                                  </div>
-                                </div>
-                                <span className="text-[10px] text-[#8E9297] font-semibold">{data.day}</span>
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    </div>
-
-                    {/* CHART LEGEND */}
-                    <div className="flex items-center justify-between text-xs text-[#8E9297]">
-                      <div className="flex items-center gap-6">
-                        <div className="flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-sm bg-[#C9A45C]" />
-                          <span>Dakhli: <strong className="text-[#C9A45C]">{money(chartData.reduce((s, d) => s + d.rev, 0))}</strong></span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-sm bg-[#EF4444]" />
-                          <span>Kharash: <strong className="text-[#EF4444]">{money(chartData.reduce((s, d) => s + d.exp, 0))}</strong></span>
-                        </div>
-                      </div>
-                      <span className="text-[#C9A45C] font-semibold">
-                        Net: {money(chartData.reduce((s, d) => s + d.rev - d.exp, 0))}
-                      </span>
-                    </div>
+                    )}
                   </div>
 
-                  {/* INVENTORY ALERTS & QUICK WIDGET (1 COL) */}
-                  <div className="p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] flex flex-col justify-between space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between border-b border-[#2A2E33] pb-3">
-                        <h4 className="text-base font-extrabold text-[#F4EFE6] tracking-tight flex items-center gap-2">
-                          <BoxIcon className="w-4 h-4 text-[#C9A45C]" />
-                          <span>Xaaladda Kaydka</span>
-                        </h4>
+                  {/* FILTERS & SEARCH & ALL DEBTS TABLE */}
+                  <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-bold text-slate-500">Filter:</span>
                         <button
-                          onClick={() => setActiveTab("inventory")}
-                          className="text-xs text-[#C9A45C] hover:underline font-semibold"
+                          onClick={() => setDebtStatusFilter("all")}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${debtStatusFilter === "all"
+                              ? "bg-blue-600 text-white shadow-sm"
+                              : "bg-slate-100 text-slate-600 hover:text-slate-900"
+                            }`}
                         >
-                          Eeg dhammaan
+                          Dhammaan ({debts.length})
+                        </button>
+                        <button
+                          onClick={() => setDebtStatusFilter("pending")}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${debtStatusFilter === "pending"
+                              ? "bg-rose-600 text-white shadow-sm"
+                              : "bg-slate-100 text-slate-600 hover:text-slate-900"
+                            }`}
+                        >
+                          Dayn Dhiman ({debts.filter((d) => d && d.status !== "paid").length})
+                        </button>
+                        <button
+                          onClick={() => setDebtStatusFilter("paid")}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${debtStatusFilter === "paid"
+                              ? "bg-emerald-600 text-white shadow-sm"
+                              : "bg-slate-100 text-slate-600 hover:text-slate-900"
+                            }`}
+                        >
+                          La Bixiyay ({debts.filter((d) => d && d.status === "paid").length})
                         </button>
                       </div>
 
-                      <div className="mt-4 space-y-3">
-                        <div className="flex items-center justify-between p-3 rounded-lg bg-[#22262A] border border-[#2A2E33]">
-                          <span className="text-xs text-[#8E9297]">Qiimaha Kaydka Guud:</span>
-                          <span className="text-sm font-extrabold text-[#C9A45C]">{money(inventoryTotals.value)}</span>
+                      <div className="flex items-center gap-3">
+                        <div className="relative w-full sm:w-64">
+                          <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                          <input
+                            type="text"
+                            placeholder="Raadi suuq ama alaab..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
                         </div>
-
-                        <div className="flex items-center justify-between p-3 rounded-lg bg-[#22262A] border border-[#2A2E33]">
-                          <span className="text-xs text-[#8E9297]">Alaabta Harsan:</span>
-                          <span className="text-sm font-bold text-[#F4EFE6]">{inventoryTotals.remaining} items</span>
-                        </div>
-
-                        {/* LOW STOCK ALERTS LIST */}
-                        <div className="space-y-2 mt-4">
-                          <p className="text-xs font-bold text-[#8E9297] uppercase tracking-wider">Calaamadaha Kaydka</p>
-                          {inventory.length === 0 ? (
-                            <p className="text-xs text-[#8E9297] italic py-2">Fadlan kayd cusub geli.</p>
-                          ) : (
-                            inventory.slice(0, 3).map((item) => {
-                              const remaining = Math.max(item.stocked - item.used, 0);
-                              const isLow = remaining <= 3;
-                              return (
-                                <div
-                                  key={item.id}
-                                  className="flex items-center justify-between p-2.5 rounded-md bg-[#22262A]/60 border border-[#2A2E33] text-xs"
-                                >
-                                  <span className="font-semibold text-[#F4EFE6] truncate max-w-[110px]">{item.item}</span>
-                                  <span
-                                    className={`px-2 py-0.5 rounded text-[11px] font-bold ${remaining === 0
-                                        ? "bg-[#EF4444]/20 text-[#EF4444]"
-                                        : isLow
-                                          ? "bg-[#C9A45C]/20 text-[#C9A45C]"
-                                          : "bg-[#22C55E]/20 text-[#22C55E]"
-                                      }`}
-                                  >
-                                    {remaining} {item.unit}
-                                  </span>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
+                        <button
+                          onClick={() => exportDebtsToCSV(debts, today)}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold hover:bg-emerald-100 transition shrink-0"
+                          title="Download Excel CSV"
+                        >
+                          📊 Export CSV
+                        </button>
                       </div>
                     </div>
 
-                    <button
-                      onClick={() => openModal("stock")}
-                      className="w-full py-2.5 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#C9A45C]/40 text-[#C9A45C] text-xs font-bold transition flex items-center justify-center gap-2"
-                    >
-                      <PlusIcon className="w-4 h-4" />
-                      <span>+ Soo Dhig Kayd Cusub</span>
-                    </button>
+                    {/* DEBTS TABLE */}
+                    <DebtTable
+                      debts={debts}
+                      filter={debtStatusFilter}
+                      search={searchQuery}
+                      onPay={(debt) => setPayDebtModal({ open: true, debtId: debt.id, amount: "", marketName: debt.marketName })}
+                      onDelete={deleteDebt}
+                      onEdit={openEditDebtModal}
+                    />
                   </div>
                 </div>
+              )}
+            </div>
+          )}
 
-                {/* RECENT ACTIVITY TABLE */}
-                <div className="p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                      <h4 className="text-base font-extrabold text-[#F4EFE6] tracking-tight">
-                        Dhaqdhaqaaqyadii Ugu Dambeeyay
-                      </h4>
-                      <p className="text-xs text-[#8E9297] mt-0.5">Dakhliga iyo kharashaadkii dhowaan la diiwaan geliyay.</p>
-                    </div>
+          {/* ==================================================== */}
+          {/* TAB 5: WARBIXINNO (REPORTS - P&L DASHBOARD) PAGE */}
+          {/* ==================================================== */}
+          {activeTab === "reports" && (
+            <div className="space-y-6">
+              {/* CONTROLS BAR */}
+              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-extrabold text-slate-900">Executive Profit & Loss Dashboard</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Warbixin maaliyadeed oo rasmi ah oo ku saleysan taariikhda la doortay.</p>
+                </div>
 
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => openModal("expense")}
-                        className="px-3 py-1.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-xs text-[#F4EFE6] hover:text-[#C9A45C] font-semibold transition"
-                      >
-                        + Add Expense
-                      </button>
-                      <button
-                        onClick={() => openModal("sale")}
-                        className="px-3 py-1.5 rounded-md bg-[#C9A45C] text-xs text-[#111315] font-bold hover:bg-[#D8B46B] transition"
-                      >
-                        + Add Income
-                      </button>
-                    </div>
+                <div className="flex flex-wrap items-center gap-3 no-print">
+                  <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl">
+                    <CalendarIcon className="w-4 h-4 text-blue-600" />
+                    <input
+                      type="date"
+                      value={reportDate}
+                      onChange={(e) => setReportDate(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-slate-900 outline-none border-none"
+                    />
                   </div>
 
-                  {/* TRANSACTIONS TABLE */}
-                  <ActivityTable activities={recentActivities} />
+                  <button
+                    onClick={() => window.print()}
+                    className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition flex items-center gap-2 shadow-md shadow-blue-500/10"
+                  >
+                    <PrinterIcon className="w-4 h-4 text-white" />
+                    <span>Print Statement</span>
+                  </button>
                 </div>
               </div>
-            )}
 
-            {/* ==================================================== */}
-            {/* TAB 2: KHARASH (EXPENSES) PAGE */}
-            {/* ==================================================== */}
-            {activeTab === "expenses" && (
-              <div className="space-y-6">
-                {/* TOP SUMMARY STATS */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <p className="text-xs text-[#8E9297] font-semibold uppercase tracking-wider">Kharashka Cash Maanta</p>
-                    <p className="text-2xl font-extrabold text-[#F4EFE6] mt-2">{money(summary.cashSpent)}</p>
-                    <p className="text-[11px] text-[#C9A45C] mt-1">Direct cash payments</p>
-                  </div>
+              {/* OVERHAULED EXECUTIVE FINANCIAL DASHBOARD REPORT */}
+              <ProfitLossDashboard summary={summary} reportDate={reportDate} />
+            </div>
+          )}
+        </div>
+      </main>
 
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <p className="text-xs text-[#8E9297] font-semibold uppercase tracking-wider">Daynta Maanta</p>
-                    <p className="text-2xl font-extrabold text-[#EF4444] mt-2">{money(summary.debt)}</p>
-                    <p className="text-[11px] text-[#EF4444]/80 mt-1">Pending debt entries</p>
-                  </div>
+      {/* ==================================================== */}
+      {/* MODAL DIALOGS & DRAWERS */}
+      {/* ==================================================== */}
 
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <p className="text-xs text-[#8E9297] font-semibold uppercase tracking-wider">Guud Ahaan Kharashka</p>
-                    <p className="text-2xl font-extrabold text-[#F4EFE6] mt-2">{money(summary.cashSpent + summary.debt)}</p>
-                    <p className="text-[11px] text-[#8E9297] mt-1">{expenses.length} total recorded entries</p>
-                  </div>
-                </div>
+      {/* 1. MARKET MODAL */}
+      <MarketModal
+        isOpen={isMarketModalOpen}
+        onClose={() => setIsMarketModalOpen(false)}
+        onSubmit={handleAddMarketSubmit}
+        form={marketForm}
+        setForm={setMarketForm}
+        isEditing={Boolean(marketForm.id)}
+      />
 
-                {/* EXPENSE TOOLBAR & TABLE */}
-                <div className="p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#2A2E33] pb-4">
-                    <div>
-                      <h3 className="text-lg font-extrabold text-[#F4EFE6]">Diiwaanka Kharashka</h3>
-                      <p className="text-xs text-[#8E9297]">Maamul dhammaan cash-ka iyo daynta meheradda ka baxday.</p>
-                    </div>
+      {/* 2. EDIT DEBT MODAL */}
+      <EditDebtModal
+        isOpen={editDebtModal.open}
+        onClose={() => setEditDebtModal({ open: false, debt: null })}
+        onSubmit={handleEditDebtSubmit}
+        form={editDebtForm}
+        setForm={setEditDebtForm}
+      />
 
-                    <div className="flex flex-wrap items-center gap-3">
-                      {/* CATEGORY FILTER */}
-                      <select
-                        value={expenseCategoryFilter}
-                        onChange={(e) => setExpenseCategoryFilter(e.target.value)}
-                        className="px-3 py-2 text-xs rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] outline-none"
-                      >
-                        <option value="all">Dhammaan Noocyada</option>
-                        <option value="cash">Lacag Cash Ah</option>
-                        <option value="debt">Dayn</option>
-                      </select>
+      {/* 3. PAY DEBT MODAL */}
+      {payDebtModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            onClick={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
+          />
 
-                      <button
-                        onClick={() => openModal("expense")}
-                        className="px-4 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition flex items-center gap-2 shadow-sm"
-                      >
-                        <PlusIcon className="w-4 h-4" />
-                        <span>+ Bixi Kharash Cusub</span>
-                      </button>
-                    </div>
-                  </div>
+          <div className="relative w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-10 p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                <DollarIcon className="w-5 h-5 text-emerald-600" />
+                <span>Bixi Daynta Suuqa</span>
+              </h3>
+              <button
+                onClick={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
 
-                  {/* EXPENSES TABLE */}
-                  <ExpenseTable
-                    expenses={expenses.filter((e) =>
-                      expenseCategoryFilter === "all" ? true : e.type === expenseCategoryFilter
-                    )}
-                    onDelete={deleteExpense}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* ==================================================== */}
-            {/* TAB 3: KAYD (INVENTORY) PAGE */}
-            {/* ==================================================== */}
-            {activeTab === "inventory" && (
-              <div className="space-y-6">
-                {/* SUMMARY METRICS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <p className="text-xs text-[#8E9297] font-semibold uppercase tracking-wider">Alaabta Oo Dhan</p>
-                    <p className="text-2xl font-extrabold text-[#F4EFE6] mt-2">{inventory.length} items</p>
-                    <p className="text-[11px] text-[#8E9297] mt-1">Total registered stock</p>
-                  </div>
-
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <p className="text-xs text-[#8E9297] font-semibold uppercase tracking-wider">Qiimaha Kaydka</p>
-                    <p className="text-2xl font-extrabold text-[#C9A45C] mt-2">{money(inventoryTotals.value)}</p>
-                    <p className="text-[11px] text-[#C9A45C] mt-1">Current total value</p>
-                  </div>
-
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <p className="text-xs text-[#8E9297] font-semibold uppercase tracking-wider">Kayd Yar (Low)</p>
-                    <p className="text-2xl font-extrabold text-[#C9A45C] mt-2">{inventoryTotals.lowStock}</p>
-                    <p className="text-[11px] text-[#C9A45C] mt-1">Needs reordering</p>
-                  </div>
-
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <p className="text-xs text-[#8E9297] font-semibold uppercase tracking-wider">Dhammaaday (Out)</p>
-                    <p className="text-2xl font-extrabold text-[#EF4444] mt-2">{inventoryTotals.outOfStock}</p>
-                    <p className="text-[11px] text-[#EF4444] mt-1">0 items remaining</p>
-                  </div>
-                </div>
-
-                {/* INVENTORY TABLE & ACTIONS */}
-                <div className="p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#2A2E33] pb-4">
-                    <div>
-                      <h3 className="text-lg font-extrabold text-[#F4EFE6]">Kaydka Restaurant-ka</h3>
-                      <p className="text-xs text-[#8E9297]">Kala soco raashinka, cabitaanka iyo agabka yaalla meheradda.</p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-3">
-                      <button
-                        onClick={() => openModal("useStock")}
-                        className="px-4 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#2A2E33] text-[#F4EFE6] text-xs font-bold transition flex items-center gap-2"
-                      >
-                        <BoxIcon className="w-4 h-4 text-[#C9A45C]" />
-                        <span>Isticmaal Kayd</span>
-                      </button>
-
-                      <button
-                        onClick={() => openModal("stock")}
-                        className="px-4 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition flex items-center gap-2 shadow-sm"
-                      >
-                        <PlusIcon className="w-4 h-4" />
-                        <span>+ Soo Dhig Kayd</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* INVENTORY POS TABLE */}
-                  <InventoryTable inventory={inventory} onDelete={deleteStock} onUseStock={openModal} />
-                </div>
-              </div>
-            )}
-
-            {/* ==================================================== */}
-            {/* TAB 4: DAYN & SUUQYO (DEBTS & MARKETS) PAGE */}
-            {/* ==================================================== */}
-            {activeTab === "debts" && (
-              <div className="space-y-6">
-                {/* HEADER BANNER */}
-                <div className="p-6 rounded-xl bg-gradient-to-r from-[#171A1D] via-[#22262A] to-[#171A1D] border border-[#2A2E33] flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
-                  <div className="space-y-2 relative z-10 max-w-2xl">
-                    <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-xs font-bold uppercase tracking-wider">
-                      <StoreIcon className="w-3.5 h-3.5" />
-                      <span>Suuqyada & Daymaha (Markets & Debts)</span>
-                    </div>
-                    <h3 className="text-2xl sm:text-3xl font-extrabold text-[#F4EFE6] tracking-tight">
-                      Maamulka Daymaha & Bakhaarrada Alaabta
-                    </h3>
-                    <p className="text-xs sm:text-sm text-[#8E9297] leading-relaxed">
-                      Diiwaanka lacagaha raashinka iyo alaabta lagu soo qaatay daynta, gadiyayaasha suuqyada, iyo Excel data analysis.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-                    <button
-                      onClick={() => exportDebtsToCSV(debts, today)}
-                      className="px-3.5 py-2 rounded-md bg-[#22C55E]/15 hover:bg-[#22C55E]/25 text-[#22C55E] border border-[#22C55E]/40 text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2"
-                    >
-                      <DocumentIcon className="w-4 h-4 text-[#22C55E]" />
-                      <span>📥 Excel Data Analysis (Download CSV)</span>
-                    </button>
-                    <button
-                      onClick={() => openModal("debt")}
-                      className="px-4 py-2.5 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2"
-                    >
-                      <PlusIcon className="w-4 h-4" />
-                      <span>+ Ku Dar Dayn Cusub</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* INLINE DIRECT MARKET PURCHASE CARD FORM */}
-                <div className="p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] shadow-xl space-y-4">
-                  <div className="flex items-center justify-between border-b border-[#2A2E33] pb-3">
-                    <h4 className="text-sm font-extrabold text-[#F4EFE6] flex items-center gap-2">
-                      <PlusIcon className="w-4 h-4 text-[#C9A45C]" />
-                      <span>Ku Dar Iib / Dayn Cusub Oo Suuq Ah (Direct Market Entry)</span>
-                    </h4>
-                    <span className="text-[11px] text-[#C9A45C] font-semibold">Directly saves to Market Cards & Supabase</span>
-                  </div>
-
-                  <form onSubmit={handleSaveDebt} className="space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-                          Suuqa / Bakhaarka (Market Name) *
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="Tusaale: Bakhaarka Xamdi, Suuqa Bakaaraha..."
-                          value={debtForm.marketName}
-                          onChange={(e) => setDebtForm({ ...debtForm, marketName: e.target.value })}
-                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-                          Alaabta la soo iibsaday (Products Purchased) *
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="Tusaale: 5 Kiish Bariis ah, 2 Bareel Saliid ah..."
-                          value={debtForm.itemDescription}
-                          onChange={(e) => setDebtForm({ ...debtForm, itemDescription: e.target.value })}
-                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-                          Talefanka Suuqa (Supplier Phone)
-                        </label>
-                        <input
-                          type="tel"
-                          placeholder="Tusaale: 061XXXXXXX"
-                          value={debtForm.supplierPhone}
-                          onChange={(e) => setDebtForm({ ...debtForm, supplierPhone: e.target.value })}
-                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-                          Qiimaha Guud ($ Value) *
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          placeholder="0.00"
-                          value={debtForm.totalAmount}
-                          onChange={(e) => setDebtForm({ ...debtForm, totalAmount: e.target.value })}
-                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-                          Lacagta Hore loo Bixiyay ($ Deposit)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          placeholder="0.00"
-                          value={debtForm.paidAmount}
-                          onChange={(e) => setDebtForm({ ...debtForm, paidAmount: e.target.value })}
-                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-                          Taariikhda Iibka (Date Bought)
-                        </label>
-                        <input
-                          type="date"
-                          value={debtForm.debtDate}
-                          onChange={(e) => setDebtForm({ ...debtForm, debtDate: e.target.value })}
-                          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
-                      <input
-                        type="text"
-                        placeholder="Xusuusin ama Faahfaahin dheeraad ah..."
-                        value={debtForm.notes}
-                        onChange={(e) => setDebtForm({ ...debtForm, notes: e.target.value })}
-                        className="w-full sm:max-w-md px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                      />
-                      <button
-                        type="submit"
-                        className="px-6 py-2.5 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2"
-                      >
-                        <PlusIcon className="w-4 h-4" />
-                        <span>💾 Kaydi Iibka Suuqa (Save Card)</span>
-                      </button>
-                    </div>
-                  </form>
-                </div>
-
-                {/* METRICS CARDS */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {/* CARD 1: JUAMALADA DAYNTA */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
-                      <span>Juamlada Daynta Guud</span>
-                      <span className="p-1.5 rounded-md bg-[#C9A45C]/10 text-[#C9A45C]">
-                        <CreditCardIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className="mt-3 text-2xl font-extrabold text-[#F4EFE6]">
-                      {money(debtSummary.totalOriginalDebt)}
-                    </div>
-                    <div className="mt-2 text-[11px] text-[#8E9297]">
-                      Wadar alaabta daynta lagu soo iibsaday
-                    </div>
-                  </div>
-
-                  {/* CARD 2: BAAQIGA LAGU LEEYAHAY */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#EF4444]/40 bg-gradient-to-br from-[#171A1D] to-[#EF4444]/5">
-                    <div className="flex items-center justify-between text-xs text-[#EF4444] font-semibold">
-                      <span>Baaqiga Lagu leeyahay</span>
-                      <span className="p-1.5 rounded-md bg-[#EF4444]/15 text-[#EF4444]">
-                        <AlertIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className="mt-3 text-2xl font-extrabold text-[#EF4444]">
-                      {money(debtSummary.totalPendingDebt)}
-                    </div>
-                    <div className="mt-2 text-[11px] text-[#EF4444]/80 font-medium">
-                      Dhiman in la bixiyo
-                    </div>
-                  </div>
-
-                  {/* CARD 3: LACAGTA LA BIXIYAY */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#22C55E]/30">
-                    <div className="flex items-center justify-between text-xs text-[#22C55E] font-semibold">
-                      <span>Lacagta La Bixiyay</span>
-                      <span className="p-1.5 rounded-md bg-[#22C55E]/10 text-[#22C55E]">
-                        <DollarIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className="mt-3 text-2xl font-extrabold text-[#22C55E]">
-                      {money(debtSummary.totalPaidDebt)}
-                    </div>
-                    <div className="mt-2 text-[11px] text-[#22C55E]/80 font-medium">
-                      Partially or fully settled
-                    </div>
-                  </div>
-
-                  {/* CARD 4: TIRADA SUUQYADA */}
-                  <div className="p-5 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                    <div className="flex items-center justify-between text-xs text-[#8E9297] font-semibold">
-                      <span>Suuqyada & Gadiyayaasha</span>
-                      <span className="p-1.5 rounded-md bg-[#3B82F6]/10 text-[#3B82F6]">
-                        <StoreIcon className="w-4 h-4" />
-                      </span>
-                    </div>
-                    <div className="mt-3 text-2xl font-extrabold text-[#F4EFE6]">
-                      {debtSummary.marketCount} <span className="text-xs font-medium text-[#8E9297]">Suuq/Bakhaar</span>
-                    </div>
-                    <div className="mt-2 text-[11px] text-[#8E9297]">
-                      Qaybaha daynta laga soo qaatay
-                    </div>
-                  </div>
-                </div>
-
-                {/* MARKETS SUMMARY GRID */}
-                {debtSummary.marketsList.length > 0 && (
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-[#C9A45C] uppercase tracking-wider flex items-center justify-between">
-                      <span>Suuqyada & Bakhaarrada (Excel Data Analysis Cards)</span>
-                      <span className="text-[#8E9297] font-normal text-[11px]">Total Markets: {debtSummary.marketCount}</span>
-                    </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                      {debtSummary.marketsList.map((m, idx) => (
-                        <div key={idx} className="p-4 rounded-lg bg-[#171A1D] border border-[#2A2E33] space-y-2 hover:border-[#C9A45C]/40 transition shadow-md">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-[#F4EFE6] flex items-center gap-1.5">
-                              <StoreIcon className="w-3.5 h-3.5 text-[#C9A45C]" />
-                              {m.name}
-                            </span>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#22262A] text-[#8E9297]">
-                              {m.count} Orod / Dayn
-                            </span>
-                          </div>
-                          {m.phone && (
-                            <p className="text-[11px] text-[#8E9297]">
-                              📞 Tel: <a href={`tel:${m.phone}`} className="text-[#C9A45C] hover:underline">{m.phone}</a>
-                            </p>
-                          )}
-                          <div className="pt-2 border-t border-[#2A2E33] flex items-center justify-between text-xs">
-                            <div>
-                              <span className="text-[#8E9297] text-[10px] block">Baaqiga Dhiman:</span>
-                              <span className={`font-extrabold ${m.pending > 0 ? "text-[#EF4444]" : "text-[#22C55E]"}`}>
-                                {money(m.pending)}
-                              </span>
-                            </div>
-                            <div className="text-right">
-                              <span className="text-[#8E9297] text-[10px] block">Juamlada Guud:</span>
-                              <span className="font-bold text-[#F4EFE6]">{money(m.total)}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* FILTERS & SEARCH & EXCEL DOWNLOAD */}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 rounded-xl bg-[#171A1D] border border-[#2A2E33]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold text-[#8E9297]">Filter:</span>
-                    <button
-                      onClick={() => setDebtStatusFilter("all")}
-                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "all" ? "bg-[#C9A45C] text-[#111315]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
-                    >
-                      Dhammaan ({debts.length})
-                    </button>
-                    <button
-                      onClick={() => setDebtStatusFilter("pending")}
-                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "pending" ? "bg-[#EF4444] text-[#F4EFE6]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
-                    >
-                      Laga rabo ({debts.filter(d => d && d.status !== 'paid').length})
-                    </button>
-                    <button
-                      onClick={() => setDebtStatusFilter("paid")}
-                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${debtStatusFilter === "paid" ? "bg-[#22C55E] text-[#111315]" : "bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6]"}`}
-                    >
-                      La Bixiyay ({debts.filter(d => d && d.status === 'paid').length})
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <div className="relative w-full sm:w-64">
-                      <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9297]" />
-                      <input
-                        type="text"
-                        placeholder="Raadi suuq ama alaab..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full pl-9 pr-3 py-1.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-                      />
-                    </div>
-                    <button
-                      onClick={() => exportDebtsToCSV(debts, today)}
-                      className="px-3 py-1.5 rounded-md bg-[#22C55E]/20 text-[#22C55E] border border-[#22C55E]/40 text-xs font-bold hover:bg-[#22C55E]/30 transition shrink-0"
-                      title="Download Excel CSV"
-                    >
-                      📊 Export CSV
-                    </button>
-                  </div>
-                </div>
-
-                {/* DEBTS TABLE */}
-                <DebtTable
-                  debts={debts}
-                  filter={debtStatusFilter}
-                  search={searchQuery}
-                  onPay={(debt) => setPayDebtModal({ open: true, debtId: debt.id, amount: "", marketName: debt.marketName })}
-                  onDelete={deleteDebt}
-                />
-              </div>
-            )}
-
-            {/* ==================================================== */}
-            {/* TAB 5: WARBIXINNO (REPORTS - P&L) PAGE */}
-            {/* ==================================================== */}
-            {activeTab === "reports" && (
-              <div className="space-y-6">
-                {/* CONTROLS BAR */}
-                <div className="p-6 rounded-xl bg-[#171A1D] border border-[#2A2E33] flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <h3 className="text-lg font-extrabold text-[#F4EFE6]">Profit & Loss Statement</h3>
-                    <p className="text-xs text-[#8E9297]">Warbixin maaliyadeed oo rasmi ah oo ku saleysan taariikhda la doortay.</p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3 no-print">
-                    <div className="flex items-center gap-2 bg-[#22262A] border border-[#2A2E33] px-3 py-1.5 rounded-md">
-                      <CalendarIcon className="w-4 h-4 text-[#C9A45C]" />
-                      <input
-                        type="date"
-                        value={reportDate}
-                        onChange={(e) => setReportDate(e.target.value)}
-                        className="bg-transparent text-xs font-semibold text-[#F4EFE6] outline-none border-none"
-                      />
-                    </div>
-
-                    <button
-                      onClick={() => window.print()}
-                      className="px-4 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] border border-[#2A2E33] text-[#F4EFE6] text-xs font-bold transition flex items-center gap-2"
-                    >
-                      <PrinterIcon className="w-4 h-4 text-[#C9A45C]" />
-                      <span>Print Statement</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* P&L STATEMENT REPORT CARD */}
-                <ProfitLossStatement summary={summary} reportDate={reportDate} />
-              </div>
-            )}
+            <PayDebtForm
+              modal={payDebtModal}
+              setModal={setPayDebtModal}
+              onSubmit={handlePayDebtSubmit}
+              onCancel={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
+            />
           </div>
-        </main>
-      </div>
+        </div>
+      )}
 
-      {/* ==================================================== */}
-      {/* SLIDE-OVER SIDE DRAWER / MODAL FOR FORMS */}
-      {/* ==================================================== */}
+      {/* 4. SLIDE-OVER MODAL DRAWER FOR OTHER FORMS */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             onClick={closeModal}
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
           />
 
-          <div className="relative w-full max-w-lg bg-[#171A1D] border border-[#2A2E33] rounded-xl shadow-2xl overflow-hidden z-10">
-            {/* MODAL HEADER */}
-            <div className="p-5 border-b border-[#2A2E33] flex items-center justify-between bg-[#22262A]/50">
-              <h3 className="text-base font-extrabold text-[#F4EFE6] flex items-center gap-2">
-                <CrownIcon className="w-5 h-5 text-[#C9A45C]" />
+          <div className="relative w-full max-w-lg bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-10">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                <CrownIcon className="w-5 h-5 text-blue-600" />
                 <span>
                   {drawerType === "expense"
                     ? "Kharash Cusub Bixi"
@@ -2000,19 +2044,18 @@ export default function Home() {
                       : drawerType === "useStock"
                         ? "Ka Jar Kaydka (Isticmaal)"
                         : drawerType === "debt"
-                          ? "Ku Dar Dayn Cusub (Suuq)"
+                          ? "Ku Soo Dar Dayn Cusub (Suuq)"
                           : "Add Income / Sale"}
                 </span>
               </h3>
               <button
                 onClick={closeModal}
-                className="p-1 rounded-md text-[#8E9297] hover:text-[#F4EFE6] hover:bg-[#22262A]"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200"
               >
                 <XIcon className="w-5 h-5" />
               </button>
             </div>
 
-            {/* MODAL BODY */}
             <div className="p-6">
               {drawerType === "expense" && (
                 <ExpenseForm
@@ -2063,93 +2106,52 @@ export default function Home() {
           </div>
         </div>
       )}
-
-      {/* QUICK PAY DEBT MODAL */}
-      {payDebtModal.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            onClick={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
-          />
-          <div className="relative w-full max-w-md bg-[#171A1D] border border-[#2A2E33] rounded-xl shadow-2xl overflow-hidden z-10 p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[#2A2E33] pb-3">
-              <h3 className="text-sm font-extrabold text-[#F4EFE6] flex items-center gap-2">
-                <StoreIcon className="w-4 h-4 text-[#C9A45C]" />
-                <span>Bixi Daynta Suuqa</span>
-              </h3>
-              <button
-                onClick={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
-                className="p-1 rounded-md text-[#8E9297] hover:text-[#F4EFE6]"
-              >
-                <XIcon className="w-4 h-4" />
-              </button>
-            </div>
-            <PayDebtForm
-              modal={payDebtModal}
-              setModal={setPayDebtModal}
-              onSubmit={handlePayDebtSubmit}
-              onCancel={() => setPayDebtModal({ open: false, debtId: null, amount: "", marketName: "" })}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-/* ==================================================== */
-/* COMPONENT HELPER FUNCTIONS & TABLES */
-/* ==================================================== */
+{/* SUB-COMPONENTS */ }
 
 function ActivityTable({ activities = [] }) {
-  const safeActivities = Array.isArray(activities) ? activities : [];
-  if (safeActivities.length === 0) {
-    return <EmptyState text="Wax dhaqdhaqaaq ah weli ma ka dhicin meheradda." />;
+  if (activities.length === 0) {
+    return <EmptyState text="Weli ma jiraan hawgallo la diiwaan geliyay." />;
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-[#2A2E33]">
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
       <table className="w-full text-left text-xs border-collapse">
-        <thead className="bg-[#22262A] text-[#8E9297] font-semibold border-b border-[#2A2E33]">
+        <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
           <tr>
-            <th className="px-4 py-3">Taariikh</th>
-            <th className="px-4 py-3">Faahfaahin</th>
-            <th className="px-4 py-3">Nooca</th>
-            <th className="px-4 py-3">Lacagta</th>
-            <th className="px-4 py-3">Status</th>
+            <th className="py-3.5 px-4">Taariikhda</th>
+            <th className="py-3.5 px-4">Qaybta</th>
+            <th className="py-3.5 px-4">Faahfaahinta</th>
+            <th className="py-3.5 px-4 text-right">Lacagta</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#2A2E33]/60 bg-[#171A1D]">
-          {safeActivities.map((item) => {
-            if (!item) return null;
-            const isIncome = Number(item.amount) > 0;
-            return (
-              <tr key={item.id || Math.random()} className="hover:bg-[#22262A]/40 transition">
-                <td className="px-4 py-3.5 text-[#8E9297] font-medium">{item.date || "-"}</td>
-                <td className="px-4 py-3.5 text-[#F4EFE6] font-bold">{item.detail || "-"}</td>
-                <td className="px-4 py-3.5">
-                  <span
-                    className={`px-2 py-0.5 rounded text-[11px] font-bold ${isIncome
-                        ? "bg-[#C9A45C]/15 text-[#C9A45C]"
-                        : item.typeCode === "debt"
-                          ? "bg-[#EF4444]/15 text-[#EF4444]"
-                          : "bg-[#A98245]/15 text-[#A98245]"
-                      }`}
-                  >
-                    {item.type || "Cash"}
+        <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
+          {activities.map((act) => (
+            <tr key={act.id} className="hover:bg-slate-50 transition">
+              <td className="py-3.5 px-4 text-slate-500 font-medium">{act.date}</td>
+              <td className="py-3.5 px-4 font-bold">
+                {act.typeCode === "revenue" ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    + Dakhli
                   </span>
-                </td>
-                <td className={`px-4 py-3.5 font-extrabold ${isIncome ? "text-[#22C55E]" : "text-[#EF4444]"}`}>
-                  {isIncome ? `+${money(item.amount)}` : money(item.amount)}
-                </td>
-                <td className="px-4 py-3.5">
-                  <span className="px-2 py-0.5 rounded bg-[#22262A] text-[#8E9297] border border-[#2A2E33] text-[10px] font-semibold">
-                    {item.status || "OK"}
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-red-50 text-red-700 border border-red-200">
+                    - Kharash
                   </span>
-                </td>
-              </tr>
-            );
-          })}
+                )}
+              </td>
+              <td className="py-3.5 px-4 font-semibold text-slate-900">{act.detail}</td>
+              <td
+                className={`py-3.5 px-4 text-right font-extrabold ${act.typeCode === "revenue" ? "text-emerald-600" : "text-red-600"
+                  }`}
+              >
+                {act.typeCode === "revenue" ? `+${money(act.amount)}` : `-${money(act.amount)}`}
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -2157,133 +2159,148 @@ function ActivityTable({ activities = [] }) {
 }
 
 function ExpenseTable({ expenses = [], onDelete }) {
-  const safeExpenses = Array.isArray(expenses) ? expenses : [];
-  if (safeExpenses.length === 0) {
-    return <EmptyState text="Kharash weli la ma gelin. Riix '+ Bixi Kharash' si aad ugu darto." />;
+  if (expenses.length === 0) {
+    return <EmptyState text="Weli ma jiraan kharashaad la diiwaan geliyay." />;
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-[#2A2E33]">
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
       <table className="w-full text-left text-xs border-collapse">
-        <thead className="bg-[#22262A] text-[#8E9297] font-semibold border-b border-[#2A2E33]">
+        <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
           <tr>
-            <th className="px-4 py-3">Nooc</th>
-            <th className="px-4 py-3">Waxa la bixiyay</th>
-            <th className="px-4 py-3">Lacagta</th>
-            <th className="px-4 py-3">Taariikh</th>
-            <th className="px-4 py-3">Xusuusin</th>
-            <th className="px-4 py-3 text-right">Action</th>
+            <th className="py-3.5 px-4">Taariikhda</th>
+            <th className="py-3.5 px-4">Nooca</th>
+            <th className="py-3.5 px-4">Kharashka</th>
+            <th className="py-3.5 px-4">Qiimaha</th>
+            <th className="py-3.5 px-4">Xusuusin</th>
+            <th className="py-3.5 px-4 text-right">Tirtir</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#2A2E33]/60 bg-[#171A1D]">
-          {safeExpenses.map((expense) => {
-            if (!expense) return null;
-            return (
-              <tr key={expense.id || Math.random()} className="hover:bg-[#22262A]/40 transition">
-                <td className="px-4 py-3.5">
-                  <span
-                    className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${expense.type === "debt"
-                        ? "bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30"
-                        : "bg-[#A98245]/15 text-[#A98245] border border-[#A98245]/30"
-                      }`}
-                  >
-                    {expense.type === "debt" ? "Dayn Payable" : "Cash Paid"}
+        <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
+          {expenses.map((e) => (
+            <tr key={e.id} className="hover:bg-slate-50 transition">
+              <td className="py-3.5 px-4 text-slate-500 font-medium">{e.date}</td>
+              <td className="py-3.5 px-4">
+                {e.type === "cash" ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                    Cesh (Cash)
                   </span>
-                </td>
-                <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">{expense.item || "-"}</td>
-                <td className="px-4 py-3.5 font-extrabold text-[#EF4444]">{money(expense.amount)}</td>
-                <td className="px-4 py-3.5 text-[#8E9297]">{expense.date || "-"}</td>
-                <td className="px-4 py-3.5 text-[#8E9297] italic">{expense.note || "-"}</td>
-                <td className="px-4 py-3.5 text-right">
-                  <button
-                    onClick={() => onDelete(expense.id)}
-                    className="p-1 rounded text-[#EF4444] hover:bg-[#EF4444]/10 transition font-bold"
-                    title="Masax"
-                  >
-                    Masax
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                    Dayn (Debt)
+                  </span>
+                )}
+              </td>
+              <td className="py-3.5 px-4 font-bold text-slate-900">{e.item}</td>
+              <td className="py-3.5 px-4 font-extrabold text-red-600">{money(e.amount)}</td>
+              <td className="py-3.5 px-4 text-slate-500">{e.note || "—"}</td>
+              <td className="py-3.5 px-4 text-right">
+                <button
+                  onClick={() => onDelete(e.id)}
+                  className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
+                  title="Tirtir"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                </button>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
   );
 }
 
+{/* REDESIGNED INVENTORY TABLE WITH HIGH VISUAL HIERARCHY & BADGES */ }
 function InventoryTable({ inventory = [], onDelete, onUseStock }) {
-  const safeInventory = Array.isArray(inventory) ? inventory : [];
-  if (safeInventory.length === 0) {
-    return <EmptyState text="Kaydka meheraddu waa faali. Riix '+ Soo Dhig Kayd' si aad ugu darto." />;
+  if (inventory.length === 0) {
+    return (
+      <div className="p-8 text-center bg-white rounded-2xl border border-dashed border-slate-300 space-y-3">
+        <BoxIcon className="w-10 h-10 text-slate-400 mx-auto opacity-50" />
+        <p className="text-xs text-slate-500 font-medium">Weli ma jiro alaab kayd ah oo la diiwaan geliyay.</p>
+        <button
+          onClick={() => onUseStock("stock")}
+          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/10"
+        >
+          + Soo Dhig Kayd Cusub
+        </button>
+      </div>
+    );
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-[#2A2E33]">
+    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
       <table className="w-full text-left text-xs border-collapse">
-        <thead className="bg-[#22262A] text-[#8E9297] font-semibold border-b border-[#2A2E33]">
+        <thead className="bg-slate-50 text-slate-700 font-extrabold border-b border-slate-200">
           <tr>
-            <th className="px-4 py-3">Magaca Sheyga</th>
-            <th className="px-4 py-3">Soo Galay</th>
-            <th className="px-4 py-3">La Isticmaalay</th>
-            <th className="px-4 py-3">Harsan</th>
-            <th className="px-4 py-3">Qiimaha Unit</th>
-            <th className="px-4 py-3">Qiimaha Guud</th>
-            <th className="px-4 py-3">Status</th>
-            <th className="px-4 py-3 text-right">Actions</th>
+            <th className="py-4 px-4">Alaabta (Product Item)</th>
+            <th className="py-4 px-4">Wadarta Kaydka (Total Stock)</th>
+            <th className="py-4 px-4">La Isticmaalay (Used Stock)</th>
+            <th className="py-4 px-4">Baaqiga Dhiman (Remaining)</th>
+            <th className="py-4 px-4">Qiimaha halkii Unit ($ Cost)</th>
+            <th className="py-4 px-4 text-center">Xaaladda (Status)</th>
+            <th className="py-4 px-4 text-right">Hawgallada (Actions)</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#2A2E33]/60 bg-[#171A1D]">
-          {safeInventory.map((item) => {
-            if (!item) return null;
-            const stocked = Number(item.stocked) || 0;
-            const used = Number(item.used) || 0;
-            const unitCost = Number(item.unitCost) || 0;
-            const remaining = Math.max(stocked - used, 0);
-            const totalVal = remaining * unitCost;
-            const isOut = remaining === 0;
-            const isLow = remaining <= 3 && !isOut;
+        <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
+          {inventory.map((item) => {
+            const remaining = Math.max((Number(item.stocked) || 0) - (Number(item.used) || 0), 0);
+            const isFinished = remaining <= 0;
+            const isLow = remaining > 0 && remaining <= 5;
 
             return (
-              <tr key={item.id || Math.random()} className="hover:bg-[#22262A]/40 transition">
-                <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">{item.item || "-"}</td>
-                <td className="px-4 py-3.5 text-[#8E9297]">
-                  {formatQuantity(stocked)} {item.unit || ""}
+              <tr key={item.id} className="hover:bg-slate-50 transition">
+                <td className="py-3.5 px-4 font-extrabold text-slate-900 text-sm">
+                  {item.item}
                 </td>
-                <td className="px-4 py-3.5 text-[#8E9297]">
-                  {formatQuantity(used)} {item.unit || ""}
-                </td>
-                <td className="px-4 py-3.5 font-bold text-[#F4EFE6]">
-                  {formatQuantity(remaining)} {item.unit || ""}
-                </td>
-                <td className="px-4 py-3.5 text-[#8E9297]">{money(unitCost)}</td>
-                <td className="px-4 py-3.5 font-extrabold text-[#C9A45C]">{money(totalVal)}</td>
-                <td className="px-4 py-3.5">
-                  <span
-                    className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${isOut
-                        ? "bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30"
-                        : isLow
-                          ? "bg-[#C9A45C]/15 text-[#C9A45C] border border-[#C9A45C]/30"
-                          : "bg-[#22C55E]/15 text-[#22C55E] border border-[#22C55E]/30"
-                      }`}
-                  >
-                    {isOut ? "Out of Stock" : isLow ? "Low Stock" : "Available"}
+                <td className="py-3.5 px-4">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                    {formatQuantity(item.stocked)} {item.unit}
                   </span>
                 </td>
-                <td className="px-4 py-3.5 text-right space-x-2">
-                  <button
-                    onClick={() => onUseStock("useStock")}
-                    disabled={isOut}
-                    className="px-2 py-1 rounded bg-[#22262A] text-[#C9A45C] border border-[#2A2E33] font-semibold hover:bg-[#2A2E33] disabled:opacity-40"
+                <td className="py-3.5 px-4">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                    {formatQuantity(item.used)} {item.unit}
+                  </span>
+                </td>
+                <td className="py-3.5 px-4">
+                  <span
+                    className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-extrabold border ${isFinished
+                        ? "bg-red-50 text-red-700 border-red-200"
+                        : isLow
+                          ? "bg-amber-50 text-amber-700 border-amber-200"
+                          : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      }`}
                   >
-                    Isticmaal
-                  </button>
-                  <button
-                    onClick={() => onDelete(item.id)}
-                    className="px-2 py-1 rounded text-[#EF4444] hover:bg-[#EF4444]/10 transition font-bold"
-                  >
-                    Masax
-                  </button>
+                    {formatQuantity(remaining)} {item.unit}
+                  </span>
+                </td>
+                <td className="py-3.5 px-4 font-bold text-slate-900">{money(item.unitCost)}</td>
+                <td className="py-3.5 px-4 text-center">
+                  {isFinished ? (
+                    <span className="px-3 py-1 rounded-full text-[11px] font-extrabold bg-red-100 text-red-700 border border-red-300">
+                      Dhamaaday
+                    </span>
+                  ) : isLow ? (
+                    <span className="px-3 py-1 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300">
+                      Woo Yaraaday
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      Woo Hayaa
+                    </span>
+                  )}
+                </td>
+                <td className="py-3.5 px-4 text-right">
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      onClick={() => onDelete(item.id)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
+                      title="Tirtir"
+                    >
+                      <TrashIcon className="w-4.5 h-4.5" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
@@ -2294,164 +2311,216 @@ function InventoryTable({ inventory = [], onDelete, onUseStock }) {
   );
 }
 
-function ProfitLossStatement({ summary = {}, reportDate = "" }) {
-  const revenue = Number(summary?.revenue) || 0;
-  const cashSpent = Number(summary?.cashSpent) || 0;
-  const debt = Number(summary?.debt) || 0;
-  const usedStockCost = Number(summary?.usedStockCost) || 0;
-  const profit = Number(summary?.profit) || 0;
-  const totalExpenses = cashSpent + debt + usedStockCost;
-  const grossProfit = revenue - usedStockCost;
+{/* OVERHAULED EXECUTIVE FINANCIAL DASHBOARD REPORT FOR WARBIXIN PAGE */ }
+function ProfitLossDashboard({ summary = {}, reportDate = "" }) {
+  const isNetProfitPositive = summary.netProfit > 0;
+  const isNetProfitNegative = summary.netProfit < 0;
 
   return (
-    <div className="max-w-4xl mx-auto rounded-xl bg-[#171A1D] border border-[#2A2E33] shadow-2xl overflow-hidden print-area">
-      {/* HEADER STATEMENT BANNER */}
-      <div className="p-8 bg-[#22262A] border-b border-[#2A2E33] text-center space-y-2">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-xs font-bold uppercase tracking-widest">
-          Financial Report
+    <div className="print-area space-y-6">
+      {/* HEADER CARD */}
+      <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm text-center space-y-1">
+        <h2 className="text-2xl font-extrabold text-slate-900 uppercase tracking-tight">Dheeman Restaurant</h2>
+        <p className="text-xs text-blue-600 font-bold uppercase tracking-widest">
+          Executive Profit & Loss Financial Statement
+        </p>
+        <p className="text-xs text-slate-400 font-medium">Taariikhda Warbixinta: {reportDate}</p>
+      </div>
+
+      {/* MULTI-CARD GRID LAYOUT (DESKTOP 2x2, MOBILE VERTICAL STACK) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* CARD 1: DAKHLIGA (REVENUE) - GREEN */}
+        <div className="p-6 rounded-2xl bg-emerald-50/60 border-2 border-emerald-200 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-emerald-200/80 pb-3">
+            <h3 className="text-sm font-extrabold text-emerald-800 uppercase tracking-wider flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-emerald-600"></span>
+              🟢 DAKHLIGA (REVENUE)
+            </h3>
+            <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full">
+              Sales Revenue
+            </span>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-emerald-700">Wadarta Iibka (Total Sales Revenue)</p>
+            <p className="text-3xl font-extrabold text-emerald-600">{money(summary.totalSales)}</p>
+            <p className="text-[11px] text-emerald-600/80">Total income collected from restaurant sales</p>
+          </div>
         </div>
-        <h2 className="text-3xl font-extrabold text-[#F4EFE6] tracking-tight">Dheeman Restaurant</h2>
-        <p className="text-xs text-[#8E9297]">
-          Profit & Loss Statement — Date: <span className="text-[#C9A45C] font-semibold">{reportDate || today}</span>
+
+        {/* CARD 2: KHARASHKA ALAABTA (COST OF GOODS / INVENTORY) - BLUE */}
+        <div className="p-6 rounded-2xl bg-blue-50/60 border-2 border-blue-200 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-blue-200/80 pb-3">
+            <h3 className="text-sm font-extrabold text-blue-800 uppercase tracking-wider flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-blue-600"></span>
+              🔵 KHARASHKA ALAABTA (COST OF GOODS)
+            </h3>
+            <span className="text-[11px] font-extrabold text-blue-700 bg-blue-100 px-2.5 py-0.5 rounded-full">
+              Inventory Cost
+            </span>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-blue-700">Alaabta Kharashkeeda (Inventory Usage Cost)</p>
+            <p className="text-3xl font-extrabold text-blue-600">{money(summary.inventoryCost)}</p>
+            <p className="text-[11px] text-blue-600/80">Cost of stock & ingredients consumed in sales</p>
+          </div>
+        </div>
+
+        {/* CARD 3: FAA'IIDADA GUUD (GROSS PROFIT) - DARK NAVY */}
+        <div className="p-6 rounded-2xl bg-white border-2 border-slate-300 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+            <h3 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-slate-900"></span>
+              🔹 FAA'IIDADA GUUD (GROSS PROFIT)
+            </h3>
+            <span className="text-[11px] font-extrabold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-full">
+              Revenue − COGS
+            </span>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-slate-600">Ma'iidada Hore (Gross Profit)</p>
+            <p className="text-3xl font-extrabold text-slate-900">{money(summary.grossProfit)}</p>
+            <p className="text-[11px] text-slate-500">Sales revenue minus raw inventory cost</p>
+          </div>
+        </div>
+
+        {/* CARD 4: KHARASHAADKA KALE (OPERATING EXPENSES) - RED */}
+        <div className="p-6 rounded-2xl bg-red-50/60 border-2 border-red-200 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-red-200/80 pb-3">
+            <h3 className="text-sm font-extrabold text-red-800 uppercase tracking-wider flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-red-600"></span>
+              🔴 KHARASHKA KALE (OPERATING EXPENSES)
+            </h3>
+            <span className="text-[11px] font-extrabold text-red-700 bg-red-100 px-2.5 py-0.5 rounded-full">
+              Operating Outflow
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 border-b border-red-100 pb-2">
+              <span>Kharashka Cesh-ka ah (Direct Cash Expenses)</span>
+              <span className="font-extrabold text-red-600">{money(summary.cashExpenses)}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 border-b border-red-100 pb-2">
+              <span>Kharashka Daynta ah (Debt Expenses)</span>
+              <span className="font-extrabold text-amber-600">{money(summary.debtExpenses)}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs font-extrabold text-red-800 pt-1">
+              <span>Wadarta Kharashka (Total Operating Expenses)</span>
+              <span className="text-base font-extrabold text-red-600">{money(summary.totalExpenses)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* HERO NET PROFIT SUMMARY CARD */}
+      <div
+        className={`p-8 rounded-2xl border-2 shadow-md space-y-3 text-center transition ${isNetProfitPositive
+            ? "bg-emerald-500 text-white border-emerald-600 shadow-emerald-500/20"
+            : isNetProfitNegative
+              ? "bg-red-500 text-white border-red-600 shadow-red-500/20"
+              : "bg-slate-900 text-white border-slate-900"
+          }`}
+      >
+        <span className="px-3.5 py-1 rounded-full bg-white/20 text-white text-xs font-extrabold uppercase tracking-widest inline-block">
+          {isNetProfitPositive ? "🟢 Maa'ida Wanaagsan" : isNetProfitNegative ? "🔴 Khasaarad" : "⚪ Baaqi Net"}
+        </span>
+
+        <p className="text-sm font-bold uppercase tracking-wider text-white/90">
+          Ma'iidada Rasmiga ah (Net Income / Profit)
+        </p>
+
+        <p className="text-4xl sm:text-5xl font-extrabold tracking-tight">
+          {money(summary.netProfit)}
+        </p>
+
+        <p className="text-xs text-white/80 max-w-lg mx-auto">
+          {isNetProfitPositive
+            ? "Meheraddu waxay ku jirtaa faa'iido nadiif ah."
+            : isNetProfitNegative
+              ? "Fadlan eeg kharashaadka maadaama kharashku ka badan yahay dakhliga."
+              : "Dakhliga iyo kharashku waa is leeyihiin."}
         </p>
       </div>
-
-      {/* STATEMENT CONTENT */}
-      <div className="p-6 space-y-6 text-sm">
-        {/* REVENUE SECTION */}
-        <div className="space-y-2">
-          <div className="text-xs font-bold uppercase tracking-wider text-[#C9A45C] border-b border-[#2A2E33] pb-1">
-            1. Income / Revenue (Dakhliga Tooska Ah)
-          </div>
-          <StatementLine label="Lacagta Iibka Meheradda Soo Gashay" value={revenue} />
-          <StatementLine label="Total Operating Income" value={revenue} isTotal />
-        </div>
-
-        {/* COGS SECTION */}
-        <div className="space-y-2">
-          <div className="text-xs font-bold uppercase tracking-wider text-[#A98245] border-b border-[#2A2E33] pb-1">
-            2. Cost of Goods Sold (Qiimaha Kaydka La Isticmaalay)
-          </div>
-          <StatementLine label="Qiimaha Raashinka/Kaydka La Isticmaalay" value={usedStockCost} />
-          <StatementLine label="Gross Profit (Faa'iidada Hordhaca Ah)" value={grossProfit} isTotal />
-        </div>
-
-        {/* OPERATING EXPENSES SECTION */}
-        <div className="space-y-2">
-          <div className="text-xs font-bold uppercase tracking-wider text-[#EF4444] border-b border-[#2A2E33] pb-1">
-            3. Operating Expenses (Kharashaadka Meheradda)
-          </div>
-          <StatementLine label="Kharash Cash Ah Oo La Bixiyay" value={cashSpent} />
-          <StatementLine label="Dayn Cusub Oo Meheradda Ku Soo Badatay" value={debt} />
-          <StatementLine label="Total Operating Expenses" value={totalExpenses} isTotal />
-        </div>
-
-        {/* NET PROFIT RESULT BANNER */}
-        <div className="pt-4 border-t-2 border-[#2A2E33]">
-          <div
-            className={`p-5 rounded-lg border flex items-center justify-between text-lg font-extrabold ${profit >= 0
-                ? "bg-[#22C55E]/10 border-[#22C55E]/40 text-[#22C55E]"
-                : "bg-[#EF4444]/10 border-[#EF4444]/40 text-[#EF4444]"
-              }`}
-          >
-            <span>{profit >= 0 ? "NET PROFIT (FAA'IIDO NADIIF AH)" : "NET LOSS (KHASAARE NADIIF AH)"}</span>
-            <span className="text-2xl tracking-tight">{money(profit)}</span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
-
-function StatementLine({ label, value, isTotal = false }) {
-  return (
-    <div className={`flex items-center justify-between py-2 px-3 rounded ${isTotal ? "bg-[#22262A] font-bold text-[#F4EFE6]" : "text-[#8E9297]"}`}>
-      <span>{label}</span>
-      <span className={isTotal ? "text-[#C9A45C]" : "text-[#F4EFE6]"}>{money(value)}</span>
-    </div>
-  );
-}
-
-/* ==================================================== */
-/* MODAL FORMS */
-/* ==================================================== */
 
 function ExpenseForm({ form, setForm, onSubmit, onCancel }) {
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">Nooca Lacag Bixinta</label>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Nooca Kharashka (Payment Type)</label>
         <select
           value={form.type}
           onChange={(e) => setForm({ ...form, type: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
         >
-          <option value="cash">Lacag Cash Ah (Paid)</option>
-          <option value="debt">Dayn (Payable Debt)</option>
+          <option value="cash">Cesh (Direct Cash)</option>
+          <option value="debt">Dayn (Debt)</option>
         </select>
       </div>
 
       <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">Waxa La Bixiyay (Sheyga/Adeegga)</label>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Kharashka oo Magaciisa ah (Item) *</label>
         <input
           type="text"
-          placeholder="Tusaale: Bariis, Koronto, Mushaar shaqaale"
+          placeholder="Tusaale: Koronto, Biyaha, Mishaha Shaqaalaha..."
           value={form.item}
           onChange={(e) => setForm({ ...form, item: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           required
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Lacagta ($)</label>
-          <input
-            type="number"
-            step="any"
-            min="0"
-            placeholder="0.00"
-            value={form.amount}
-            onChange={(e) => setForm({ ...form, amount: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Taariikhda</label>
-          <input
-            type="date"
-            value={form.date}
-            onChange={(e) => setForm({ ...form, date: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          />
-        </div>
-      </div>
-
       <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">Faahfaahin / Xusuusin (Optional)</label>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Qiimaha ($ Amount) *</label>
         <input
-          type="text"
-          placeholder="Qoraal gaaban..."
-          value={form.note}
-          onChange={(e) => setForm({ ...form, note: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          type="number"
+          step="0.01"
+          placeholder="0.00"
+          value={form.amount}
+          onChange={(e) => setForm({ ...form, amount: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          required
         />
       </div>
 
-      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Taariikhda</label>
+        <input
+          type="date"
+          value={form.date}
+          onChange={(e) => setForm({ ...form, date: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Xusuusin (Notes)</label>
+        <textarea
+          placeholder="Faahfaahin dheeraad ah..."
+          value={form.note}
+          onChange={(e) => setForm({ ...form, note: e.target.value })}
+          className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 h-20"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 rounded-md bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold"
+          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
         >
-          Kansal
+          Jooji
         </button>
         <button
           type="submit"
-          className="px-5 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md"
+          className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition shadow-md shadow-red-500/10"
         >
-          Kaydi Kharash
+          Kaydi Kharashka
         </button>
       </div>
     </form>
@@ -2462,81 +2531,78 @@ function StockForm({ form, setForm, onSubmit, onCancel }) {
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">Magaca Sheyga/Raashinka</label>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Magaca Alaabta (Item Name) *</label>
         <input
           type="text"
-          placeholder="Tusaale: Bur, Saliid, Sugar"
+          placeholder="Tusaale: Bariis, Saliid, Qawa..."
           value={form.item}
           onChange={(e) => setForm({ ...form, item: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           required
         />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Tirada Soo Gashay</label>
+          <label className="block text-xs font-bold text-slate-700 mb-1">Tirada (Quantity) *</label>
           <input
             type="number"
-            step="any"
-            min="0"
-            placeholder="10.5"
+            step="0.01"
+            placeholder="0.00"
             value={form.stocked}
             onChange={(e) => setForm({ ...form, stocked: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             required
           />
         </div>
+
         <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Unit (Qeexid)</label>
+          <label className="block text-xs font-bold text-slate-700 mb-1">Unit (Qeybta)</label>
           <input
             type="text"
-            placeholder="Kiish, Kartoon, Litir"
+            placeholder="kiish, bareel, kartoon..."
             value={form.unit}
             onChange={(e) => setForm({ ...form, unit: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Qiimaha Halkii Unit ($)</label>
-          <input
-            type="number"
-            step="any"
-            min="0"
-            placeholder="18.50"
-            value={form.unitCost}
-            onChange={(e) => setForm({ ...form, unitCost: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Taariikhda</label>
-          <input
-            type="date"
-            value={form.stockedDate}
-            onChange={(e) => setForm({ ...form, stockedDate: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          />
-        </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Qiimaha halkii Unit ($ Cost)</label>
+        <input
+          type="number"
+          step="0.01"
+          placeholder="0.00"
+          value={form.unitCost}
+          onChange={(e) => setForm({ ...form, unitCost: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
       </div>
 
-      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Taariikhda Soo Dhigista</label>
+        <input
+          type="date"
+          value={form.stockedDate}
+          onChange={(e) => setForm({ ...form, stockedDate: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 rounded-md bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold"
+          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
         >
-          Kansal
+          Jooji
         </button>
         <button
           type="submit"
-          className="px-5 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md"
+          className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-md shadow-blue-500/10"
         >
-          Kaydi Stock
+          Kaydi Alaabta
         </button>
       </div>
     </form>
@@ -2544,65 +2610,64 @@ function StockForm({ form, setForm, onSubmit, onCancel }) {
 }
 
 function UseStockForm({ form, inventory, setForm, onSubmit, onCancel }) {
-  const availableInventory = inventory.filter((item) => item.stocked - item.used > 0);
-
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">Dooro Sheyga La Isticmaalayo</label>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Dooro Alaabta (Select Stock) *</label>
         <select
           value={form.stockId}
           onChange={(e) => setForm({ ...form, stockId: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           required
         >
-          <option value="">-- Dooro Shey --</option>
-          {availableInventory.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.item} — {formatQuantity(item.stocked - item.used)} {item.unit} harsan
-            </option>
-          ))}
+          <option value="">-- Dooro Alaab --</option>
+          {inventory.map((item) => {
+            const rem = Math.max(item.stocked - item.used, 0);
+            return (
+              <option key={item.id} value={item.id}>
+                {item.item} ({rem} {item.unit} dhiman)
+              </option>
+            );
+          })}
         </select>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Tirada La Isticmaalay</label>
-          <input
-            type="number"
-            step="any"
-            min="0"
-            placeholder="1.5"
-            value={form.quantity}
-            onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Taariikhda</label>
-          <input
-            type="date"
-            value={form.date}
-            onChange={(e) => setForm({ ...form, date: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          />
-        </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Tirada la Isticmaalay (Quantity Used) *</label>
+        <input
+          type="number"
+          step="0.01"
+          placeholder="0.00"
+          value={form.quantity}
+          onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          required
+        />
       </div>
 
-      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Taariikhda Isticmaalka</label>
+        <input
+          type="date"
+          value={form.date}
+          onChange={(e) => setForm({ ...form, date: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 rounded-md bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold"
+          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
         >
-          Kansal
+          Jooji
         </button>
         <button
           type="submit"
-          className="px-5 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md"
+          className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition shadow-md shadow-amber-500/20 flex items-center gap-1.5"
         >
-          Ka Jar Kaydka
+          <span>- Ka Jar Kaydka</span>
         </button>
       </div>
     </form>
@@ -2613,78 +2678,319 @@ function SaleForm({ form, setForm, onSubmit, onCancel }) {
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">Faahfaahinta Iibka</label>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Alaabta / Adeegga la iibiyay (Sale Item) *</label>
         <input
           type="text"
-          placeholder="Tusaale: Cunto ama Cabitaan iib maalinle ah"
+          placeholder="Tusaale: Iibka Qadada, Cashada, Sharaabka..."
           value={form.item}
           onChange={(e) => setForm({ ...form, item: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           required
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Lacagta Soo Gashay ($)</label>
-          <input
-            type="number"
-            step="any"
-            min="0"
-            placeholder="250.50"
-            value={form.amount}
-            onChange={(e) => setForm({ ...form, amount: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">Taariikhda</label>
-          <input
-            type="date"
-            value={form.date}
-            onChange={(e) => setForm({ ...form, date: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          />
-        </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Lacagta Soogashay ($ Amount) *</label>
+        <input
+          type="number"
+          step="0.01"
+          placeholder="0.00"
+          value={form.amount}
+          onChange={(e) => setForm({ ...form, amount: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          required
+        />
       </div>
 
-      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Taariikhda Iibka</label>
+        <input
+          type="date"
+          value={form.date}
+          onChange={(e) => setForm({ ...form, date: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 rounded-md bg-[#22262A] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold"
+          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
         >
-          Kansal
+          Jooji
         </button>
         <button
           type="submit"
-          className="px-5 py-2 rounded-md bg-[#22C55E] hover:bg-[#16A34A] text-[#111315] text-xs font-extrabold transition shadow-md"
+          className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-md shadow-emerald-500/10"
         >
-          Kaydi Dakhli
+          Kaydi Dakhliga
         </button>
       </div>
     </form>
   );
 }
 
-function EmptyState({ text }) {
+function DebtForm({ form, setForm, onSubmit, onCancel }) {
   return (
-    <div className="p-8 text-center bg-[#22262A]/40 rounded-lg border border-dashed border-[#2A2E33] space-y-2">
-      <BoxIcon className="w-8 h-8 text-[#8E9297] mx-auto opacity-60" />
-      <p className="text-xs font-semibold text-[#8E9297]">{text}</p>
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Magaca Suuqa / Bakhaarka *</label>
+        <input
+          type="text"
+          placeholder="Tusaale: Bakhaarka Xamdi, Suuqa Bakaaraha..."
+          value={form.marketName}
+          onChange={(e) => setForm({ ...form, marketName: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          required
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Telefanka / Nambarka Xiriirka</label>
+        <input
+          type="tel"
+          placeholder="Tusaale: 061XXXXXXX"
+          value={form.supplierPhone}
+          onChange={(e) => setForm({ ...form, supplierPhone: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Alaabta la soo iibsaday *</label>
+        <input
+          type="text"
+          placeholder="Tusaale: 5 Kiish Bariis ah, 2 Bareel Saliid ah..."
+          value={form.itemDescription}
+          onChange={(e) => setForm({ ...form, itemDescription: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          required
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-bold text-slate-700 mb-1">Qiimaha Guud ($) *</label>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="0.00"
+            value={form.totalAmount}
+            onChange={(e) => setForm({ ...form, totalAmount: e.target.value })}
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-slate-700 mb-1">Lacagta La Bixiyay ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="0.00"
+            value={form.paidAmount}
+            onChange={(e) => setForm({ ...form, paidAmount: e.target.value })}
+            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Taariikhda Daynta</label>
+        <input
+          type="date"
+          value={form.debtDate}
+          onChange={(e) => setForm({ ...form, debtDate: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Xusuusin / Faahfaahin</label>
+        <textarea
+          placeholder="Faahfaahin ku saabsan bixinta..."
+          value={form.notes}
+          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 h-20"
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
+        >
+          Jooji
+        </button>
+        <button
+          type="submit"
+          className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-md shadow-blue-500/10"
+        >
+          Kaydi Daynta
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function PayDebtForm({ modal, setModal, onSubmit, onCancel }) {
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-bold">
+        Bixinta Daynta Suuqa: <strong className="text-slate-900">{modal.marketName}</strong>
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Lacagta la bixinayo ($) *</label>
+        <input
+          type="number"
+          step="0.01"
+          placeholder="0.00"
+          value={modal.amount}
+          onChange={(e) => setModal({ ...modal, amount: e.target.value })}
+          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-xs outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          required
+          autoFocus
+        />
+      </div>
+
+      <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition"
+        >
+          Jooji
+        </button>
+        <button
+          type="submit"
+          className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-md shadow-emerald-500/10"
+        >
+          Bixi Lacagta
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function DebtTable({ debts, filter, search, onPay, onDelete, onEdit }) {
+  const filtered = useMemo(() => {
+    return debts.filter((d) => {
+      if (filter === "pending" && d.status === "paid") return false;
+      if (filter === "paid" && d.status !== "paid") return false;
+
+      if (search) {
+        const q = search.toLowerCase();
+        const m = (d.marketName || "").toLowerCase();
+        const i = (d.itemDescription || "").toLowerCase();
+        const p = (d.supplierPhone || "").toLowerCase();
+        return m.includes(q) || i.includes(q) || p.includes(q);
+      }
+
+      return true;
+    });
+  }, [debts, filter, search]);
+
+  if (filtered.length === 0) {
+    return <EmptyState text="Weli ma jiraan daymo laga diiwaan geliyay suuqyada." />;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+      <table className="w-full text-left text-xs border-collapse">
+        <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+          <tr>
+            <th className="py-3.5 px-4">Suuqa / Bakhaarka</th>
+            <th className="py-3.5 px-4">Alaabta / Raashinka</th>
+            <th className="py-3.5 px-4">Taariikhda</th>
+            <th className="py-3.5 px-4 text-right">Qiimaha Guud</th>
+            <th className="py-3.5 px-4 text-right">La Bixiyay</th>
+            <th className="py-3.5 px-4 text-right">Baaqiga Daynta</th>
+            <th className="py-3.5 px-4 text-center">Xaaladda</th>
+            <th className="py-3.5 px-4 text-right">Hawgallada</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 bg-white text-slate-800">
+          {filtered.map((d) => {
+            const pending = Math.max(d.totalAmount - d.paidAmount, 0);
+            return (
+              <tr key={d.id} className="hover:bg-slate-50 transition">
+                <td className="py-3.5 px-4 font-bold text-slate-900">
+                  <div>{d.marketName}</div>
+                  {d.supplierPhone && (
+                    <span className="text-[10px] text-slate-400 font-normal">📞 {d.supplierPhone}</span>
+                  )}
+                </td>
+                <td className="py-3.5 px-4 text-slate-800 font-semibold">{d.itemDescription}</td>
+                <td className="py-3.5 px-4 text-slate-500">{d.debtDate}</td>
+                <td className="py-3.5 px-4 text-right font-bold text-slate-900">{money(d.totalAmount)}</td>
+                <td className="py-3.5 px-4 text-right font-bold text-emerald-600">{money(d.paidAmount)}</td>
+                <td className="py-3.5 px-4 text-right font-extrabold text-rose-600">{money(pending)}</td>
+                <td className="py-3.5 px-4 text-center">
+                  {d.status === "paid" ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      ✓ La Bixiyay
+                    </span>
+                  ) : d.status === "partial" ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                      Qayb Bixis
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                      Dayn Dhiman
+                    </span>
+                  )}
+                </td>
+                <td className="py-3.5 px-4 text-right">
+                  <div className="flex items-center justify-end gap-2">
+                    {d.status !== "paid" && (
+                      <button
+                        onClick={() => onPay(d)}
+                        className="px-3 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-[11px] border border-emerald-200 transition"
+                      >
+                        Bixi Dayn
+                      </button>
+                    )}
+                    {onEdit && (
+                      <button
+                        onClick={() => onEdit(d)}
+                        className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] border border-blue-200 transition"
+                      >
+                        Beddel
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onDelete(d.id)}
+                      className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
+                      title="Tirtir"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-/* ==================================================== */
-/* INLINE SVG ICONS */
-/* ==================================================== */
+function EmptyState({ text }) {
+  return (
+    <div className="p-8 text-center bg-white rounded-2xl border border-dashed border-slate-300">
+      <p className="text-xs text-slate-500 font-medium">{text}</p>
+    </div>
+  );
+}
 
 function CrownIcon({ className }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3l4 6 3-4 3 4 4-6v14H5V3z" />
     </svg>
   );
 }
@@ -2712,12 +3018,15 @@ function NavIcon({ name, className }) {
     );
   }
   if (name === "store") {
-    return <StoreIcon className={className} />;
+    return (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h18v4H3V3zm2 4v12a2 2 0 002 2h10a2 2 0 002-2V7M9 11h6m-6 4h4" />
+      </svg>
+    );
   }
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
     </svg>
   );
 }
@@ -2725,7 +3034,7 @@ function NavIcon({ name, className }) {
 function PlusIcon({ className }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
     </svg>
   );
 }
@@ -2862,261 +3171,5 @@ function DocumentIcon({ className }) {
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
     </svg>
-  );
-}
-
-function DebtForm({ form, setForm, onSubmit, onCancel }) {
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
-      <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-          Suuqa / Bakhaarka (Market Name) *
-        </label>
-        <input
-          type="text"
-          placeholder="Tusaale: Bakhaarka Xamdi, Suuqa Bakaaraha..."
-          value={form.marketName}
-          onChange={(e) => setForm({ ...form, marketName: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          required
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-          Talefanka / Nambarka Suuqa (Optional Contact)
-        </label>
-        <input
-          type="tel"
-          placeholder="Tusaale: 061XXXXXXX ama 062XXXXXXX"
-          value={form.supplierPhone}
-          onChange={(e) => setForm({ ...form, supplierPhone: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-          Alaabta la soo iibsaday / Faahfaahin *
-        </label>
-        <input
-          type="text"
-          placeholder="Tusaale: 5 Kiish oo Bariis ah, 2 Bareel Saliid ah..."
-          value={form.itemDescription}
-          onChange={(e) => setForm({ ...form, itemDescription: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          required
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">
-            Qiimaha Guud ($) *
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            placeholder="0.00"
-            value={form.totalAmount}
-            onChange={(e) => setForm({ ...form, totalAmount: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-            required
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-bold text-[#8E9297] mb-1">
-            Lacagta Hore loo Bixiyay ($)
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            placeholder="0.00"
-            value={form.paidAmount}
-            onChange={(e) => setForm({ ...form, paidAmount: e.target.value })}
-            className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          />
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-          Taariikhda Daynta
-        </label>
-        <input
-          type="date"
-          value={form.debtDate}
-          onChange={(e) => setForm({ ...form, debtDate: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-          Xusuusin / Qoraal Dheeraad ah
-        </label>
-        <textarea
-          placeholder="Faahfaahin ku saabsan ballanta bixinta..."
-          value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          className="w-full px-3 py-2 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C] h-20"
-        />
-      </div>
-
-      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="px-4 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold transition"
-        >
-          Kansal
-        </button>
-        <button
-          type="submit"
-          className="px-5 py-2 rounded-md bg-[#C9A45C] hover:bg-[#D8B46B] text-[#111315] text-xs font-extrabold transition shadow-md"
-        >
-          Kaydi Daynta
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function PayDebtForm({ modal, setModal, onSubmit, onCancel }) {
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
-      <div className="p-3 rounded-lg bg-[#C9A45C]/10 border border-[#C9A45C]/30 text-[#C9A45C] text-xs font-semibold">
-        Bixinta Daynta Suuqa: <strong className="text-[#F4EFE6]">{modal.marketName}</strong>
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-[#8E9297] mb-1">
-          Lacagta la bixinayo ($) *
-        </label>
-        <input
-          type="number"
-          step="0.01"
-          placeholder="0.00"
-          value={modal.amount}
-          onChange={(e) => setModal({ ...modal, amount: e.target.value })}
-          className="w-full px-3 py-2.5 rounded-md bg-[#22262A] border border-[#2A2E33] text-[#F4EFE6] text-xs outline-none focus:border-[#C9A45C]"
-          required
-          autoFocus
-        />
-      </div>
-
-      <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2A2E33]">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="px-4 py-2 rounded-md bg-[#22262A] hover:bg-[#2A2E33] text-[#8E9297] hover:text-[#F4EFE6] text-xs font-bold transition"
-        >
-          Kansal
-        </button>
-        <button
-          type="submit"
-          className="px-5 py-2 rounded-md bg-[#22C55E] hover:bg-[#16A34A] text-[#111315] text-xs font-extrabold transition shadow-md"
-        >
-          Bixi Lacagta
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function DebtTable({ debts, filter, search, onPay, onDelete }) {
-  const filtered = useMemo(() => {
-    return debts.filter((d) => {
-      if (filter === "pending" && d.status === "paid") return false;
-      if (filter === "paid" && d.status !== "paid") return false;
-
-      if (search) {
-        const q = search.toLowerCase();
-        const m = (d.marketName || "").toLowerCase();
-        const i = (d.itemDescription || "").toLowerCase();
-        const p = (d.supplierPhone || "").toLowerCase();
-        return m.includes(q) || i.includes(q) || p.includes(q);
-      }
-
-      return true;
-    });
-  }, [debts, filter, search]);
-
-  if (filtered.length === 0) {
-    return <EmptyState text="Weli ma jiraan daymo laga diiwaan geliyay suuqyada." />;
-  }
-
-  return (
-    <div className="overflow-x-auto rounded-lg border border-[#2A2E33]">
-      <table className="w-full text-left text-xs border-collapse">
-        <thead className="bg-[#22262A] text-[#8E9297] font-semibold border-b border-[#2A2E33]">
-          <tr>
-            <th className="py-3 px-4">Suuqa / Bakhaarka</th>
-            <th className="py-3 px-4">Alaabta / Raashinka</th>
-            <th className="py-3 px-4">Taariikhda</th>
-            <th className="py-3 px-4">Qiimaha Guud</th>
-            <th className="py-3 px-4">La Bixiyay</th>
-            <th className="py-3 px-4">Baaqiga Dhiman</th>
-            <th className="py-3 px-4">Xaaladda</th>
-            <th className="py-3 px-4 text-right">Hawgallada</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-[#2A2E33] bg-[#171A1D]">
-          {filtered.map((d) => {
-            const pending = Math.max(d.totalAmount - d.paidAmount, 0);
-            return (
-              <tr key={d.id} className="hover:bg-[#22262A]/40 transition">
-                <td className="py-3 px-4 font-bold text-[#F4EFE6]">
-                  <div>{d.marketName}</div>
-                  {d.supplierPhone && (
-                    <span className="text-[10px] text-[#8E9297] font-normal">📞 {d.supplierPhone}</span>
-                  )}
-                </td>
-                <td className="py-3 px-4 text-[#F4EFE6]">{d.itemDescription}</td>
-                <td className="py-3 px-4 text-[#8E9297]">{d.debtDate}</td>
-                <td className="py-3 px-4 font-bold text-[#F4EFE6]">{money(d.totalAmount)}</td>
-                <td className="py-3 px-4 text-[#22C55E] font-semibold">{money(d.paidAmount)}</td>
-                <td className="py-3 px-4 font-extrabold text-[#EF4444]">{money(pending)}</td>
-                <td className="py-3 px-4">
-                  {d.status === "paid" ? (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#22C55E]/15 text-[#22C55E] border border-[#22C55E]/30">
-                      ✓ La Bixiyay
-                    </span>
-                  ) : d.status === "partial" ? (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#C9A45C]/15 text-[#C9A45C] border border-[#C9A45C]/30">
-                      Qayb Bixis
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30">
-                      Laga Rabo
-                    </span>
-                  )}
-                </td>
-                <td className="py-3 px-4 text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    {d.status !== "paid" && (
-                      <button
-                        onClick={() => onPay(d)}
-                        className="px-2.5 py-1 rounded bg-[#22C55E]/10 hover:bg-[#22C55E]/20 text-[#22C55E] font-bold text-[11px] border border-[#22C55E]/30 transition"
-                      >
-                        Bixi Dayn
-                      </button>
-                    )}
-                    <button
-                      onClick={() => onDelete(d.id)}
-                      className="p-1 rounded text-[#8E9297] hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition"
-                      title="Tirtir"
-                    >
-                      <TrashIcon className="w-4 h-4" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
   );
 }
